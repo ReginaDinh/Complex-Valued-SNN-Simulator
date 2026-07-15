@@ -1,0 +1,6 @@
+{
+  "name": "Complex-Valued SNN Simulator",
+  "description": "An interactive playground, analysis, and PyTorch implementation suite for SOTA Complex-Valued Spiking Neural Networks (CV-SNNs) with phase-modulated spikes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
