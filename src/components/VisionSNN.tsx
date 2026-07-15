@@ -97,6 +97,12 @@ export default function VisionSNN() {
     for (let c = 0; c < 4; c++) {
       const classTemplate = TEMPLATES[CLASS_NAMES[c]];
       const row: Complex[] = [];
+      
+      // Calculate active pixels for normalization
+      let activePixels = 0;
+      for (let i = 0; i < 64; i++) {
+        if (classTemplate[i] === 1) activePixels++;
+      }
 
       for (let idx = 0; idx < 64; idx++) {
         const x = idx % GRID_SIZE;
@@ -116,11 +122,12 @@ export default function VisionSNN() {
 
         if (classTemplate[idx] === 1) {
           // Inside template: high magnitude, conjugated phase (reconstructive)
-          row.push(complex.fromPolar(0.9, targetWPhase));
+          // Normalize to prevent current saturation
+          row.push(complex.fromPolar(1.5 / activePixels, targetWPhase));
         } else {
           // Outside template: penalize by adding an out-of-phase weight (180 deg shifted)
           // which causes destructive interference if that pixel is incorrectly drawn!
-          row.push(complex.fromPolar(0.5, targetWPhase + Math.PI));
+          row.push(complex.fromPolar(0.8 / activePixels, targetWPhase + Math.PI));
         }
       }
       weights.push(row);
@@ -431,7 +438,7 @@ export default function VisionSNN() {
           </div>
 
           <p className="text-xs text-elegant-text/75 leading-relaxed">
-            Nhấp chọn hoặc kéo chuột để vẽ các ký hiệu. Màu sắc thể hiện <strong>góc pha ($\theta$)</strong> của từng pixel trong miền số phức để tạo sóng truyền tới synapse.
+            Nhấp chọn hoặc kéo chuột để vẽ các ký hiệu. Màu sắc thể hiện <strong>góc pha (θ)</strong> của từng pixel trong miền số phức để tạo sóng truyền tới synapse.
           </p>
 
           {/* Quick templates presets selector */}
@@ -498,7 +505,7 @@ export default function VisionSNN() {
 
             <div className="space-y-1.5">
               <div className="flex justify-between text-xs font-mono text-elegant-muted">
-                <span>Hệ số nhân góc pha ($\gamma$):</span>
+                <span>Hệ số nhân góc pha (γ):</span>
                 <span className="text-elegant-cyan font-bold">{globalPhaseScale.toFixed(1)}x</span>
               </div>
               <input
@@ -717,7 +724,7 @@ export default function VisionSNN() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5 text-xs text-elegant-text/80 leading-relaxed">
           <p>
             Trong xử lý hình ảnh, thông tin không chỉ nằm ở cường độ sáng (biên độ - magnitude) mà còn nằm ở sự tương quan không gian (cạnh, biên, góc). 
-            Bằng cách mã hóa **vị trí pixel thành các giá trị góc pha ($\theta$) tương đối**, CV-SNN cho phép tự động trích xuất các vector đặc trưng không gian thông qua các **phép tính cộng tích chập pha tự nhiên** trên các cổng vi sai memristor.
+            Bằng cách mã hóa <strong>vị trí pixel thành các giá trị góc pha (θ) tương đối</strong>, CV-SNN cho phép tự động trích xuất các vector đặc trưng không gian thông qua các <strong>phép tính cộng tích chập pha tự nhiên</strong> trên các cổng vi sai memristor.
           </p>
           <p>
             Điều này loại bỏ hoàn toàn các mạch cộng nhân dấu phẩy động cồng kềnh trong các bộ tăng tốc AI truyền thống. Khi có nhiễu nạp (Device write noise), cơ chế lan truyền sóng pha của CV-SNN sẽ phân tán lỗi ngẫu nhiên theo hình tròn trong mặt phẳng phức Gauss, giúp duy trì cấu trúc hình học tổng thể của tấm ảnh vẽ tốt hơn hàng trăm lần so với mạng SNN miền thực.

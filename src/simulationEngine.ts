@@ -50,12 +50,14 @@ export class ComplexLIFNeuron {
   }
 
   // Update step with complex-valued input current
-  step(current: Complex): { spiked: boolean; spikeVal: Complex; uBefore: Complex; uAfter: Complex } {
+  step(current: Complex): { spiked: boolean; spikeVal: Complex; uBefore: Complex; uIntegrated: Complex; uAfter: Complex } {
     const uBefore = { ...this.u };
     
     // 1. Decay and Integrate: U(t) = beta * U(t-1) + I(t)
     const decayed = complex.mul(this.u, this.leak);
     this.u = complex.add(decayed, current);
+    
+    const uIntegrated = { ...this.u };
     
     // 2. Threshold check: |U(t)| >= threshold
     const uMag = complex.mag(this.u);
@@ -83,6 +85,7 @@ export class ComplexLIFNeuron {
       spiked,
       spikeVal,
       uBefore,
+      uIntegrated,
       uAfter: { ...this.u }
     };
   }
@@ -189,6 +192,7 @@ export class TSComplexSNN {
   // Forward pass through the network over time, returning outputs
   forward(xSeq: Complex[][]): {
     outputSpikeRates: number[];
+    surrogateRates: number[];
     allOutputs: Complex[][]; // [time][class]
     allSpikes: boolean[][];  // [time][class]
     allPotentials: Complex[][]; // [time][class]
@@ -200,6 +204,7 @@ export class TSComplexSNN {
     const allSpikes: boolean[][] = [];
     const allPotentials: Complex[][] = [];
     const spikeCounts = new Array(this.outFeatures).fill(0);
+    const surrogateRates = new Array(this.outFeatures).fill(0);
     
     for (let t = 0; t < timeSteps; t++) {
       const stepInputs = xSeq[t];
@@ -218,6 +223,9 @@ export class TSComplexSNN {
         // Feed into neuron
         const neuronResult = this.neurons[o].step(current);
         
+        // Use the integrated potential magnitude as a continuous proxy for excitation (surrogate gradient)
+        surrogateRates[o] += complex.mag(neuronResult.uIntegrated);
+        
         stepPotentials.push(neuronResult.uAfter);
         stepSpikes.push(neuronResult.spiked);
         stepOuts.push(neuronResult.spikeVal);
@@ -234,19 +242,20 @@ export class TSComplexSNN {
     
     return {
       outputSpikeRates: spikeCounts.map(count => count / timeSteps),
+      surrogateRates: surrogateRates.map(s => s / timeSteps),
       allOutputs,
       allSpikes,
       allPotentials
     };
   }
 
-  // Evaluate loss (Cross-Entropy) on a batch
+  // Evaluate loss (Cross-Entropy) on a batch using surrogate rates
   evaluateLoss(sample: SignalSample): { loss: number; predictions: number[] } {
-    const { outputSpikeRates } = this.forward(sample.inputSpikeSequence);
+    const { surrogateRates } = this.forward(sample.inputSpikeSequence);
     
-    // Apply softmax over firing rates (with stabilization)
-    const maxRate = Math.max(...outputSpikeRates);
-    const exps = outputSpikeRates.map(r => Math.exp(r - maxRate));
+    // Apply softmax over surrogate firing rates (with stabilization)
+    const maxRate = Math.max(...surrogateRates);
+    const exps = surrogateRates.map(r => Math.exp(r - maxRate));
     const sumExps = exps.reduce((a, b) => a + b, 0);
     const probs = exps.map(e => e / (sumExps || 1e-9));
     

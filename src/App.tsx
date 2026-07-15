@@ -321,25 +321,26 @@ export default function App() {
       const acc = correct / valSize;
       
       // Update states
-      setEpoch(prev => {
-        const nextEpoch = prev + 1;
-        // Keep track of loss history
-        setTrainingLossHistory(lossHistory => {
-          const nextHistory = [...lossHistory, loss];
-          if (nextHistory.length > 50) nextHistory.shift();
-          return nextHistory;
-        });
-        setCurrentLoss(loss);
-        setTrainAccuracy(prevAcc => {
-          // Smooth accuracy
-          return parseFloat((prevAcc * 0.8 + acc * 0.2).toFixed(2));
-        });
-        setCurrentSample(sample);
-        const currentForward = network.forward(sample.inputSpikeSequence);
-        setSampleOutputs(currentForward);
-        
-        return nextEpoch;
+      setEpoch(prev => prev + 1);
+      
+      // Keep track of loss history
+      setTrainingLossHistory(lossHistory => {
+        const nextHistory = [...lossHistory, loss];
+        if (nextHistory.length > 50) nextHistory.shift();
+        return nextHistory;
       });
+      
+      setCurrentLoss(loss);
+      
+      setTrainAccuracy(prevAcc => {
+        // Smooth accuracy
+        return parseFloat((prevAcc * 0.8 + acc * 0.2).toFixed(2));
+      });
+      
+      setCurrentSample(sample);
+      
+      const currentForward = network.forward(sample.inputSpikeSequence);
+      setSampleOutputs(currentForward);
       
     }, 150); // Speed of training step
 

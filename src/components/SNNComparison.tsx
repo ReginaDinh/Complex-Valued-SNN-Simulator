@@ -100,7 +100,7 @@ export default function SNNComparison() {
     for (let t = 0; t <= simSteps; t++) {
       // Traditional decay (strictly real axis, 1D)
       const s_mag = initialMag * Math.pow(leakMag, t);
-      const s_re = s_mag * Math.cos(initialPhaseRad); // keep on same angle for 1D visual comparison, or just real line
+      const s_re = s_mag; // 1D strictly on the real line
       const s_im = 0; // 1D line
 
       // Complex decay (spiral, magnitude decay + phase rotation)
@@ -151,22 +151,22 @@ export default function SNNComparison() {
               <span>Mạng Nổ Xung Miền Thực (Traditional SNN)</span>
             </h3>
             <span className="text-[10px] font-mono bg-rose-500/10 text-rose-400 border border-rose-500/20 px-2 py-0.5 rounded uppercase">
-              Miền Thực ({"$\\mathbb{R}$"})
+              Miền Thực (ℝ)
             </span>
           </div>
 
           <div className="space-y-3 text-xs leading-relaxed text-elegant-text/90">
             <p>
-              Mạng nổ xung truyền thống mô phỏng sinh học bằng các biến trạng thái là các số thực đơn thuần. Thông tin được mã hóa dựa trên **tần số nổ xung (Rate coding)** hoặc **thời điểm nổ xung đơn lẻ (Temporal coding)**.
+              Mạng nổ xung truyền thống mô phỏng sinh học bằng các biến trạng thái là các số thực đơn thuần. Thông tin được mã hóa dựa trên <strong>tần số nổ xung (Rate coding)</strong> hoặc <strong>thời điểm nổ xung đơn lẻ (Temporal coding)</strong>.
             </p>
             <ul className="space-y-2.5 font-mono text-[11px] text-elegant-text/80">
               <li className="flex items-start gap-2">
                 <span className="text-rose-400 font-bold shrink-0">■ Điện thế màng:</span>
-                <span>{"$V(t) \\in \\mathbb{R}$"} — Một giá trị vô hướng (scalar) 1 chiều biểu diễn mức tích lũy năng lượng.</span>
+                <span>V(t) ∈ ℝ — Một giá trị vô hướng (scalar) 1 chiều biểu diễn mức tích lũy năng lượng.</span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-rose-400 font-bold shrink-0">■ Trọng số Synapse:</span>
-                <span>{"$W \\in \\mathbb{R}$"} — Chỉ biểu diễn cường độ kích thích {"(W > 0)"} hoặc ức chế {"(W < 0)"}.</span>
+                <span>W ∈ ℝ — Chỉ biểu diễn cường độ kích thích (W {">"} 0) hoặc ức chế (W {"<"} 0).</span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-rose-400 font-bold shrink-0">■ Tích lũy dòng điện:</span>
@@ -189,26 +189,26 @@ export default function SNNComparison() {
               <span>Mạng Nổ Xung Miền Phức (Complex-valued cLIF)</span>
             </h3>
             <span className="text-[10px] font-mono bg-elegant-cyan/10 text-elegant-cyan border border-elegant-cyan/20 px-2 py-0.5 rounded uppercase animate-pulse">
-              Miền Phức ({"$\\mathbb{C}$"})
+              Miền Phức (ℂ)
             </span>
           </div>
 
           <div className="space-y-3 text-xs leading-relaxed text-elegant-text/90">
             <p>
-              CV-SNN mở rộng trạng thái nổ xung sang miền phức để mô phỏng **đồng bộ hóa pha và nhịp sinh học tự nhiên**. Thông tin mang cả biên độ (năng lượng) lẫn góc pha (thời gian tương đối).
+              CV-SNN mở rộng trạng thái nổ xung sang miền phức để mô phỏng <strong>đồng bộ hóa pha và nhịp sinh học tự nhiên</strong>. Thông tin mang cả biên độ (năng lượng) lẫn góc pha (thời gian tương đối).
             </p>
             <ul className="space-y-2.5 font-mono text-[11px] text-elegant-text/80">
               <li className="flex items-start gap-2">
                 <span className="text-elegant-cyan font-bold shrink-0">■ Điện thế màng:</span>
-                <span>{"$U(t) = V(t) + j \\cdot Y(t) \\in \\mathbb{C}$"} — Đại lượng 2 chiều mang cả biên độ {"$|U(t)|$"} và pha góc {"$\\theta(t)$"}.</span>
+                <span>U(t) = V(t) + j·Y(t) ∈ ℂ — Đại lượng 2 chiều mang cả biên độ |U(t)| và pha góc θ(t).</span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-elegant-cyan font-bold shrink-0">■ Trọng số Synapse:</span>
-                <span>{"$W = M \\cdot e^{j\\phi} \\in \\mathbb{C}$"} — Vừa điều khiển biên độ truyền {"$M$"}, vừa làm **lệch pha dòng điện** một góc {"$\\phi$"}.</span>
+                <span>W = M·e^(jϕ) ∈ ℂ — Vừa điều khiển biên độ truyền M, vừa làm <strong>lệch pha dòng điện</strong> một góc ϕ.</span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-elegant-cyan font-bold shrink-0">■ Tích lũy dòng điện:</span>
-                <span>Phép cộng vector số phức, cho phép **Giao thoa cộng pha** (constructive) hoặc **Giao thoa triệt tiêu** (destructive).</span>
+                <span>Phép cộng vector số phức, cho phép <strong>Giao thoa cộng pha</strong> (constructive) hoặc <strong>Giao thoa triệt tiêu</strong> (destructive).</span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-elegant-cyan font-bold shrink-0">■ Suy hao rò rỉ:</span>
@@ -231,7 +231,7 @@ export default function SNNComparison() {
         </div>
 
         <p className="text-xs text-elegant-text/80 leading-relaxed">
-          Hãy điều chỉnh pha góc ($\theta$) và biên độ của hai dòng tín hiệu đầu vào **Kênh A (Đỏ)** và **Kênh B (Xanh dương)**. 
+          Hãy điều chỉnh pha góc (θ) và biên độ của hai dòng tín hiệu đầu vào <strong>Kênh A (Đỏ)</strong> và <strong>Kênh B (Xanh dương)</strong>. 
           Quan sát xem chúng triệt tiêu hay cộng hợp lại với nhau thế nào trong miền số phức so với phép cộng tuyến tính miền thực!
         </p>
 
@@ -377,7 +377,7 @@ export default function SNNComparison() {
                 <span className="font-mono text-sm font-black text-rose-400">{traditionalSum.toFixed(2)}</span>
               </div>
               <p className="text-[10px] text-elegant-text/70 leading-normal">
-                Không quan tâm pha lệch, dòng điện tổng hợp đơn giản bằng **tổng trị số tuyệt đối** ($A + B$). SNN hoàn toàn mù thông tin thời gian/lệch pha!
+                Không quan tâm pha lệch, dòng điện tổng hợp đơn giản bằng <strong>tổng trị số tuyệt đối</strong> (A + B). SNN hoàn toàn mù thông tin thời gian/lệch pha!
               </p>
             </div>
 
@@ -398,7 +398,7 @@ export default function SNNComparison() {
                 </span>
               </div>
               <p className="text-[10px] text-elegant-text/70 leading-normal">
-                Tổng hợp thông qua **phép cộng vector**. Nếu lệch pha 180°, chúng triệt tiêu nhau về 0. Nếu đồng pha, chúng cộng hưởng mạnh mẽ!
+                Tổng hợp thông qua <strong>phép cộng vector</strong>. Nếu lệch pha 180°, chúng triệt tiêu nhau về 0. Nếu đồng pha, chúng cộng hưởng mạnh mẽ!
               </p>
             </div>
 
@@ -575,7 +575,7 @@ export default function SNNComparison() {
                 <strong className="text-rose-400">Phân rã tuyến tính (SNN):</strong> Khi không có kích thích, điện thế màng rò rỉ thẳng tuột về 0. Năng lượng mất đi nhưng không giữ lại bất cứ dấu vết chu kỳ thời gian nào của xung trước đó.
               </p>
               <p className="leading-relaxed">
-                <strong className="text-elegant-cyan">Quỹ đạo xoắn ốc (CV-SNN):</strong> Khi rò rỉ, cLIF neuron tiếp tục **xoay pha**. Điều này đóng vai trò giống như một **bộ nhớ pha thời gian ngắn (short-term phase memory)**. Neuron vẫn ghi nhớ thời gian tương đối của xung gần nhất, giúp liên kết hoàn hảo với xung tiếp theo!
+                <strong className="text-elegant-cyan">Quỹ đạo xoắn ốc (CV-SNN):</strong> Khi rò rỉ, cLIF neuron tiếp tục <strong>xoay pha</strong>. Điều này đóng vai trò giống như một <strong>bộ nhớ pha thời gian ngắn (short-term phase memory)</strong>. Neuron vẫn ghi nhớ thời gian tương đối của xung gần nhất, giúp liên kết hoàn hảo với xung tiếp theo!
               </p>
             </div>
 
@@ -1007,7 +1007,7 @@ function InteractiveArchitecture() {
             <div className="p-2.5 bg-[#070b10] border border-elegant-muted/10 rounded-lg text-center">
               <span className="text-[11px] font-mono font-semibold block" style={{ color: themeColor }}>Công thức Toán giải tích:</span>
               <div className="text-xs font-mono text-white/95 mt-1.5 font-bold">
-                {"$$ " + selectedData.formula + " $$"}
+                {selectedData.formula}
               </div>
             </div>
 
