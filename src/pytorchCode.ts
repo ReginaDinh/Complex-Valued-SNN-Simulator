@@ -1,226 +1,250 @@
 export const pytorchCodeString = `import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
+import math
 
-class ComplexSurrogateHeaviside(torch.autograd.Function):
+class VonMisesSurrogate(torch.autograd.Function):
     """
-    Surrogate gradient for Complex-Valued Spiking Neurons (cLIF).
-    Approximate gradient for non-differentiable magnitude thresholding:
-        |U| >= V_th
-    We backpropagate gradients scaled by the surrogate derivative of the magnitude,
-    and rotate the gradient direction using the phase of the membrane potential.
+    SOTA: Bessel-Normalized Von Mises Circular Surrogate Gradient for cLIF Neurons.
+    Solves the non-differentiable circular threshold condition |U| >= V_th
+    using directional statistics and Wirtinger complex calculus.
     """
     @staticmethod
-    def forward(ctx, u, threshold, alpha=2.0):
-        # u is a complex tensor
-        # threshold is a real scalar
+    def forward(ctx, u: torch.Tensor, threshold: float, kappa: float = 2.5):
         magnitude = torch.abs(u)
-        spikes_fired = (magnitude >= threshold).to(u.dtype)
-        
-        # Save tensors for backward pass
-        ctx.save_for_backward(u, torch.tensor(threshold), torch.tensor(alpha))
-        
-        # Spike output carries phase: s = e^{i * arg(u)} if fired else 0
-        phase = torch.angle(u)
-        # Avoid division by zero by adding a small epsilon
-        complex_spikes = spikes_fired * torch.exp(1j * phase)
-        return complex_spikes
+        spikes_fired = (magnitude >= threshold).to(u.real.dtype)
+
+        # Unit phasor e^{j * arg(u)} = u / (|u| + eps) avoids atan2 branch cut instability
+        unit_phasor = u / (magnitude + 1e-8)
+        ctx.save_for_backward(u, magnitude, unit_phasor)
+        ctx.threshold = threshold
+        ctx.kappa = kappa
+
+        # Emitted complex spike preserves instantaneous membrane phase: S(t) = H(|U| - V_th) * e^{j * theta}
+        return spikes_fired.to(u.dtype) * unit_phasor
 
     @staticmethod
-    def backward(ctx, grad_output):
-        u, threshold_tensor, alpha_tensor = ctx.saved_tensors
-        threshold = threshold_tensor.item()
-        alpha = alpha_tensor.item()
-        
-        magnitude = torch.abs(u)
-        # Fast Sigmoid surrogate gradient on the magnitude difference
-        # f'(x) = 1 / (1 + alpha * |x|)^2
-        diff = magnitude - threshold
-        surrogate_grad_mag = 1.0 / (1.0 + alpha * torch.abs(diff))**2
-        
-        # Backpropagate gradient through complex numbers
-        # The gradient with respect to the complex potential U is rotated by the phase of U
-        phase = torch.angle(u)
-        grad_u = grad_output * surrogate_grad_mag * torch.exp(-1j * phase)
-        
+    def backward(ctx, grad_output: torch.Tensor):
+        u, magnitude, unit_phasor = ctx.saved_tensors
+        threshold = ctx.threshold
+        kappa = ctx.kappa
+
+        # Normalized radial distance from circular firing threshold
+        diff = torch.clamp((magnitude - threshold) / max(threshold, 1e-6), -1.0, 1.0)
+
+        # Normalized Von Mises radial surrogate density:
+        # g'(diff) = exp(kappa * cos(pi * diff)) / (2 * pi * I_0(kappa))
+        kappa_t = torch.tensor(kappa, dtype=magnitude.dtype, device=magnitude.device)
+        i0_val = torch.special.i0(kappa_t)
+        surrogate_radial = torch.exp(kappa * torch.cos(math.pi * diff)) / (2.0 * math.pi * i0_val + 1e-8)
+
+        # Wirtinger derivative projection:
+        # Radial component scales magnitude transition; tangential component preserves phase gradient
+        radial_proj = torch.real(grad_output * torch.conj(unit_phasor))
+        tangential_proj = torch.imag(grad_output * torch.conj(unit_phasor)) / (magnitude + threshold)
+
+        grad_u = (surrogate_radial * radial_proj + 1j * tangential_proj * 0.25) * unit_phasor
         return grad_u, None, None
+
+
+class KaratsubaComplexLinear(nn.Module):
+    """
+    SOTA: True 3-Multiply Karatsuba Complex Linear Layer.
+    Standard complex multiplication (W_r + j W_i)(X_r + j X_i) requires 4 real MatMuls.
+    Karatsuba identity reduces this to 3 real MatMuls:
+        k1 = W_r * X_r
+        k2 = W_i * X_i
+        k3 = (W_r + W_i) * (X_r + X_i)
+        Re(Y) = k1 - k2 + b_r
+        Im(Y) = k3 - k1 - k2 + b_i
+    Achieves 25% reduction in multiplier array energy on neuromorphic hardware.
+    """
+    def __init__(self, in_features: int, out_features: int, bias: bool = True):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+
+        # Complex Xavier / Glorot initialization
+        scale = math.sqrt(1.5 / in_features)
+        self.weight_re = nn.Parameter(torch.randn(out_features, in_features) * scale)
+        self.weight_im = nn.Parameter(torch.randn(out_features, in_features) * scale)
+
+        if bias:
+            self.bias_re = nn.Parameter(torch.zeros(out_features))
+            self.bias_im = nn.Parameter(torch.zeros(out_features))
+        else:
+            self.register_parameter('bias_re', None)
+            self.register_parameter('bias_im', None)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        xr, xi = x.real, x.imag
+        wr, wi = self.weight_re, self.weight_im
+
+        # Exactly 3 real matrix multiplications (k1, k2, k3)
+        k1 = F.linear(xr, wr)
+        k2 = F.linear(xi, wi)
+        k3 = F.linear(xr + xi, wr + wi)
+
+        out_real = k1 - k2
+        out_imag = k3 - k1 - k2
+
+        if self.bias_re is not None:
+            out_real = out_real + self.bias_re
+            out_imag = out_imag + self.bias_im
+
+        return torch.complex(out_real, out_imag)
 
 
 class ComplexLIF(nn.Module):
     """
-    State-of-the-Art Complex-Valued Leaky Integrate-and-Fire (cLIF) Neuron Module.
-    
+    Complex-Valued Leaky Integrate-and-Fire (cLIF) Neuron with Learnable Spiral Decay.
     Equations:
-        1. Current integration: I[t] = input_current
-        2. Membrane dynamics with Complex Leak (beta):
-           U[t] = beta * U[t-1] + I[t]
-           where beta = leak_mag * e^{i * leak_phase}
-        3. Threshold: |U[t]| >= V_th
-        4. Output Spike: S[t] = e^{i * arg(U[t])} if fired else 0
-        5. Reset (Soft/Subtraction):
-           U[t] = U[t] - V_th * e^{i * arg(U[t])} if fired
+        1. U_pre[t] = beta * U[t-1] + I[t],  where beta = |beta| * e^{j * omega}
+        2. S[t] = H(|U_pre[t]| - V_th) * e^{j * arg(U_pre[t])}
+        3. Soft Reset: U[t] = U_pre[t] - V_th * S[t]
+           Hard Reset: U[t] = U_pre[t] * (1 - |S[t]|)
     """
-    def __init__(self, num_features, threshold=1.0, leak_mag=0.9, leak_phase=0.1, reset_mechanism='soft'):
+    def __init__(
+        self,
+        num_features: int,
+        threshold: float = 1.0,
+        leak_mag: float = 0.85,
+        leak_phase: float = 0.15,
+        reset_mechanism: str = 'soft',
+    ):
         super().__init__()
         self.num_features = num_features
         self.threshold = threshold
         self.reset_mechanism = reset_mechanism
-        
-        # Leak can be parameterized as a complex parameter to allow learnable phase rotations!
-        # U(t) = beta * U(t-1)
-        self.leak_mag = nn.Parameter(torch.tensor([leak_mag] * num_features, dtype=torch.float32))
-        self.leak_phase = nn.Parameter(torch.tensor([leak_phase] * num_features, dtype=torch.float32))
-        
-        self.u = None  # Complex membrane potential state
 
-    def init_state(self, batch_size, device):
-        # Initialize membrane potential as zero in complex plane
+        # Learnable decay magnitude and intrinsic subthreshold oscillation frequency
+        self.leak_mag = nn.Parameter(torch.full((num_features,), leak_mag, dtype=torch.float32))
+        self.leak_phase = nn.Parameter(torch.full((num_features,), leak_phase, dtype=torch.float32))
+        self.u = None
+
+    def init_state(self, batch_size: int, device: torch.device):
         self.u = torch.zeros(batch_size, self.num_features, dtype=torch.complex64, device=device)
 
-    def forward(self, input_current):
+    def forward(self, input_current: torch.Tensor):
         if self.u is None or self.u.shape[0] != input_current.shape[0]:
             self.init_state(input_current.shape[0], input_current.device)
-            
-        # Constrain decay magnitude to [0, 0.99] for stability
-        mag = torch.clamp(self.leak_mag, 0.0, 0.99)
-        phase = self.leak_phase
-        beta = torch.complex(mag * torch.cos(phase), mag * torch.sin(phase))
-        
-        # Update membrane potential: U(t) = beta * U(t-1) + I(t)
-        self.u = beta * self.u + input_current
-        
-        # Generate spikes with surrogate gradient
-        spikes = ComplexSurrogateHeaviside.apply(self.u, self.threshold)
-        
-        # Reset membrane potential
-        spikes_fired = torch.abs(spikes) > 0
+
+        mag = torch.clamp(self.leak_mag, 0.05, 0.99)
+        beta = torch.polar(mag, self.leak_phase)
+
+        # Pre-reset membrane potential integration
+        u_pre = beta * self.u + input_current
+        spikes = VonMisesSurrogate.apply(u_pre, self.threshold)
+
+        # Post-spike membrane reset (detach spike mask on reset path for stable BPTT)
         if self.reset_mechanism == 'soft':
-            # Subtraction in the direction of the phase: U = U - V_th * e^{i * theta}
-            self.u = self.u - spikes * self.threshold
+            self.u = u_pre - spikes.detach() * self.threshold
         else:
-            # Hard reset: set to 0
-            self.u = torch.where(spikes_fired, torch.zeros_like(self.u), self.u)
-            
-        return spikes
+            fired_mask = (torch.abs(spikes.detach()) > 0)
+            self.u = torch.where(fired_mask, torch.zeros_like(u_pre), u_pre)
+
+        return spikes, u_pre
 
 
-class ComplexLinear(nn.Module):
+class PhaseSynchronyAttention(nn.Module):
     """
-    Complex-Valued Linear Layer: Y = W * X + B
-    where W, X, B are complex numbers.
-    Mathematically:
-        Re(Y) = Re(W) * Re(X) - Im(W) * Im(X) + Re(B)
-        Im(Y) = Re(W) * Im(X) + Im(W) * Re(X) + Im(B)
+    SOTA: Temporal Phase-Synchrony Attention across time steps (T, B, C).
+    Computes Hermitian inner product Re(Q * K^H) on unit phasors to avoid
+    +-pi angle wrap-around discontinuities.
     """
-    def __init__(self, in_features, out_features):
+    def __init__(self, features: int):
         super().__init__()
-        # Initializing real and imaginary parts of weights
-        self.fc_real = nn.Linear(in_features, out_features, bias=True)
-        self.fc_imag = nn.Linear(in_features, out_features, bias=True)
+        self.q_proj = KaratsubaComplexLinear(features, features, bias=False)
+        self.k_proj = KaratsubaComplexLinear(features, features, bias=False)
+        self.v_proj = KaratsubaComplexLinear(features, features, bias=True)
+        self.scale = 1.0 / math.sqrt(features)
 
-    def forward(self, x):
-        # x is complex tensor (batch_size, in_features)
-        x_real = x.real
-        x_imag = x.imag
-        
-        # Matrix multiplication in complex field
-        out_real = self.fc_real(x_real) - self.fc_imag(x_imag)
-        out_imag = self.fc_real(x_imag) + self.fc_imag(x_real)
-        
-        return torch.complex(out_real, out_imag)
+    def forward(self, z_seq: torch.Tensor) -> torch.Tensor:
+        # z_seq shape: (T, B, C) -> transpose to (B, T, C)
+        z = z_seq.permute(1, 0, 2)
+        q = self.q_proj(z)
+        k = self.k_proj(z)
+        v = self.v_proj(z)
+
+        # Normalize Q and K to unit phasors so attention scores measure pure phase coherence
+        q_unit = q / (torch.abs(q) + 1e-6)
+        k_unit = k / (torch.abs(k) + 1e-6)
+
+        # Hermitian phase-locking score: Re(Q @ K^H) / sqrt(C) -> shape (B, T, T)
+        phase_scores = torch.real(torch.matmul(q_unit, torch.conj(k_unit).transpose(-2, -1))) * self.scale
+        attn_weights = torch.softmax(phase_scores, dim=-1).to(v.dtype)
+
+        out = torch.matmul(attn_weights, v)
+        return (out + z).permute(1, 0, 2)
 
 
 class ComplexSNN(nn.Module):
     """
-    A 3-layer Complex-Valued Spiking Neural Network for Spectral/Phase Pattern Recognition.
+    End-to-End Complex-Valued Spiking Neural Network with Karatsuba Synapses,
+    Temporal Phase-Synchrony Attention, and Pre-Reset Membrane Readout.
     """
-    def __init__(self, in_dim, hidden_dim, out_dim):
+    def __init__(self, in_dim: int, hidden_dim: int, out_dim: int):
         super().__init__()
-        self.layer1 = ComplexLinear(in_dim, hidden_dim)
+        self.fc1 = KaratsubaComplexLinear(in_dim, hidden_dim)
         self.lif1 = ComplexLIF(hidden_dim, threshold=1.0, leak_mag=0.85, leak_phase=0.15)
-        
-        self.layer2 = ComplexLinear(hidden_dim, out_dim)
-        self.lif2 = ComplexLIF(out_dim, threshold=1.0, leak_mag=0.85, leak_phase=0.15)
+        self.phase_attn = PhaseSynchronyAttention(hidden_dim)
+        self.fc2 = KaratsubaComplexLinear(hidden_dim, out_dim)
+        self.lif2 = ComplexLIF(out_dim, threshold=1.0, leak_mag=0.85, leak_phase=0.12)
 
-    def forward(self, x_seq):
-        # x_seq size: (time_steps, batch_size, in_dim) - complex tensor
+    def forward(self, x_seq: torch.Tensor):
+        # x_seq: (time_steps, batch_size, in_dim) complex64
         time_steps, batch_size, _ = x_seq.shape
-        
-        # Reset LIF states
         self.lif1.init_state(batch_size, x_seq.device)
         self.lif2.init_state(batch_size, x_seq.device)
-        
-        # Record output spikes over time
-        out_spikes_seq = []
-        
+
+        hidden_spikes = []
         for t in range(time_steps):
-            x_t = x_seq[t]
-            
-            # Layer 1
-            cur1 = self.layer1(x_t)
-            spk1 = self.lif1(cur1)
-            
-            # Layer 2
-            cur2 = self.layer2(spk1)
-            spk2 = self.lif2(cur2)
-            
-            out_spikes_seq.append(spk2)
-            
-        # Stack output spikes: (time_steps, batch_size, out_dim)
-        out_spikes_seq = torch.stack(out_spikes_seq, dim=0)
-        
-        # We classify based on average spike magnitude (firing rate) across time
-        # or aggregate complex phase of spikes
-        avg_spike_intensity = torch.mean(torch.abs(out_spikes_seq), dim=0) # (batch_size, out_dim)
-        
-        return avg_spike_intensity, out_spikes_seq
+            spk1, _ = self.lif1(self.fc1(x_seq[t]))
+            hidden_spikes.append(spk1)
+
+        hidden_seq = torch.stack(hidden_spikes, dim=0)  # (T, B, hidden_dim)
+        attended_seq = self.phase_attn(hidden_seq)      # Phase-locked feature stream
+
+        out_spikes = []
+        out_potentials = []
+        for t in range(time_steps):
+            spk2, u_pre2 = self.lif2(self.fc2(attended_seq[t]))
+            out_spikes.append(spk2)
+            out_potentials.append(u_pre2)
+
+        out_spikes_seq = torch.stack(out_spikes, dim=0)
+        out_pot_seq = torch.stack(out_potentials, dim=0)
+
+        # Hybrid readout: pre-reset membrane magnitude + firing rate
+        readout_logits = torch.mean(torch.abs(out_pot_seq) + 0.5 * torch.abs(out_spikes_seq), dim=0)
+        return readout_logits, out_spikes_seq
 
 
-# ==========================================================
-# SIMULATION & TRAINING EXAMPLE (FOR DEMO)
-# ==========================================================
 if __name__ == "__main__":
-    # Generate synthetic complex-valued inputs (e.g., FFT spectral data)
-    # 10 batch size, 20 time steps, 16 features
-    batch_size = 10
-    time_steps = 25
-    in_features = 16
-    hidden_features = 32
-    out_features = 3  # 3 target classes
-    
+    batch_size, time_steps, in_features, hidden_features, out_features = 16, 30, 16, 32, 2
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-    
-    # Generate random magnitude [0, 1.5] and phase [-pi, pi]
-    mag = torch.rand(time_steps, batch_size, in_features) * 1.5
-    phase = (torch.rand(time_steps, batch_size, in_features) - 0.5) * 2 * np.pi
-    inputs = torch.complex(mag * torch.cos(phase), mag * torch.sin(phase)).to(device)
-    
-    # Target classes (0, 1, or 2)
-    targets = torch.randint(0, out_features, (batch_size,)).to(device)
-    
-    # Initialize the network
-    model = ComplexSNN(in_dim=in_features, hidden_dim=hidden_features, out_dim=out_features).to(device)
-    
-    # Loss & Optimizer
+
+    # Normalized time axis t_norm in [0, 1) prevents Nyquist integer aliasing
+    t_norm = torch.linspace(0, 1, time_steps, device=device).view(time_steps, 1, 1)
+    model = ComplexSNN(in_features, hidden_features, out_features).to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=5e-3)
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
-    
-    # Training step
-    optimizer.zero_grad()
-    
-    # Forward pass: returns average spike intensity of output neurons
-    output_intensity, all_spikes = model(inputs)
-    
-    # Calculate loss
-    loss = criterion(output_intensity, targets)
-    
-    # Backward pass & Optimize
-    loss.backward()
-    optimizer.step()
-    
-    print(f"Successfully ran single training step!")
-    print(f"Loss: {loss.item():.4f}")
-    print(f"Output Intensity Shape: {output_intensity.shape}")
-    print(f"Complex Spikes Fired: Total magnitude of output spikes over time is {torch.sum(torch.abs(all_spikes)).item():.2f}")
+
+    for step in range(1, 6):
+        targets = torch.randint(0, out_features, (batch_size,), device=device)
+        freqs = torch.where(targets == 0, 1.0, 4.5).view(1, batch_size, 1)
+        phase_grad = torch.where(targets == 0, 0.0, math.pi / 2).view(1, batch_size, 1)
+        ch_idx = torch.arange(in_features, device=device).view(1, 1, in_features)
+
+        phases = 2 * math.pi * freqs * t_norm + ch_idx * phase_grad
+        inputs = torch.polar(torch.ones_like(phases) * 0.9, phases)
+
+        optimizer.zero_grad()
+        logits, spikes = model(inputs)
+        loss = criterion(logits, targets)
+        loss.backward()
+        optimizer.step()
+        acc = (logits.argmax(dim=-1) == targets).float().mean().item() * 100
+        print(f"Step {step:02d} | Loss: {loss.item():.4f} | Acc: {acc:.1f}% | Spikes: {spikes.abs().sum().item():.0f}")
 `;

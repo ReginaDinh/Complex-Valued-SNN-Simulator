@@ -1,0 +1,29 @@
+
+> react-example@0.0.0 lint
+> tsc --noEmit
+
+src/components/ChoiLabTab.tsx(190,104): error TS1382: Unexpected token. Did you mean `{'>'}` or `&gt;`?
+src/components/ChoiLabTab.tsx(322,207): error TS1382: Unexpected token. Did you mean `{'>'}` or `&gt;`?
+src/components/ChoiLabTab.tsx(322,318): error TS1382: Unexpected token. Did you mean `{'>'}` or `&gt;`?
+src/components/SNNComparison.tsx(245,206): error TS1382: Unexpected token. Did you mean `{'>'}` or `&gt;`?
+src/components/SNNComparison.tsx(250,70): error TS1382: Unexpected token. Did you mean `{'>'}` or `&gt;`?
+src/components/SNNComparison.tsx(279,211): error TS1382: Unexpected token. Did you mean `{'>'}` or `&gt;`?
+src/components/SNNComparison.tsx(284,70): error TS1382: Unexpected token. Did you mean `{'>'}` or `&gt;`?
+src/components/SNNComparison.tsx(380,112): error TS1382: Unexpected token. Did you mean `{'>'}` or `&gt;`?
+src/components/SNNComparison.tsx(391,108): error TS1382: Unexpected token. Did you mean `{'>'}` or `&gt;`?
+src/components/SNNComparison.tsx(436,70): error TS1382: Unexpected token. Did you mean `{'>'}` or `&gt;`?
+src/components/SNNComparison.tsx(463,87): error TS1382: Unexpected token. Did you mean `{'>'}` or `&gt;`?
+src/components/SNNComparison.tsx(478,129): error TS1382: Unexpected token. Did you mean `{'>'}` or `&gt;`?
+src/components/SNNComparison.tsx(494,102): error TS1382: Unexpected token. Did you mean `{'>'}` or `&gt;`?
+src/components/SNNComparison.tsx(626,127): error TS1382: Unexpected token. Did you mean `{'>'}` or `&gt;`?
+src/components/SNNComparison.tsx(628,159): error TS1382: Unexpected token. Did you mean `{'>'}` or `&gt;`?
+src/components/SNNComparison.tsx(762,131): error TS1382: Unexpected token. Did you mean `{'>'}` or `&gt;`?
+src/components/SNNComparison.tsx(959,49): error TS1109: Expression expected.
+src/components/SNNComparison.tsx(959,58): error TS1005: ',' expected.
+src/components/SNNComparison.tsx(959,90): error TS1109: Expression expected.
+src/components/SNNComparison.tsx(959,92): error TS1109: Expression expected.
+src/components/SNNComparison.tsx(959,101): error TS1005: ',' expected.
+src/components/SNNComparison.tsx(959,136): error TS1109: Expression expected.
+src/components/SNNComparison.tsx(992,127): error TS1382: Unexpected token. Did you mean `{'>'}` or `&gt;`?
+src/components/SNNComparison.tsx(1005,120): error TS1382: Unexpected token. Did you mean `{'>'}` or `&gt;`?
+src/components/VisionSNN.tsx(464,44): error TS1382: Unexpected token. Did you mean `{'>'}` or `&gt;`?

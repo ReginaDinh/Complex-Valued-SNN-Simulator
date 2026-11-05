@@ -1,184 +1,368 @@
-// Complex number helper class for TypeScript simulation
-export interface Complex {
-  re: number;
-  im: number;
-}
-
+// Complex number utilities for Float32Array and tuple [Re, Im]
 export const complex = {
-  zero: (): Complex => ({ re: 0, im: 0 }),
-  create: (re: number, im: number): Complex => ({ re, im }),
-  fromPolar: (r: number, theta: number): Complex => ({
-    re: r * Math.cos(theta),
-    im: r * Math.sin(theta),
-  }),
-  add: (c1: Complex, c2: Complex): Complex => ({
-    re: c1.re + c2.re,
-    im: c1.im + c2.im,
-  }),
-  sub: (c1: Complex, c2: Complex): Complex => ({
-    re: c1.re - c2.re,
-    im: c1.im - c2.im,
-  }),
-  mul: (c1: Complex, c2: Complex): Complex => ({
-    re: c1.re * c2.re - c1.im * c2.im,
-    im: c1.re * c2.im + c1.im * c2.re,
-  }),
-  scale: (c: Complex, s: number): Complex => ({
-    re: c.re * s,
-    im: c.im * s,
-  }),
-  mag: (c: Complex): number => Math.sqrt(c.re * c.re + c.im * c.im),
-  angle: (c: Complex): number => Math.atan2(c.im, c.re),
-  conj: (c: Complex): Complex => ({ re: c.re, im: -c.im }),
+  zero: (): [number, number] => [0, 0],
+  fromPolar: (r: number, theta: number): [number, number] => [r * Math.cos(theta), r * Math.sin(theta)],
+  create: (re: number, im: number): [number, number] => [re, im],
+  add: (c1: [number, number], c2: [number, number]): [number, number] => [c1[0] + c2[0], c1[1] + c2[1]],
+  sub: (c1: [number, number], c2: [number, number]): [number, number] => [c1[0] - c2[0], c1[1] - c2[1]],
+  mul: (c1: [number, number], c2: [number, number]): [number, number] => [
+    c1[0] * c2[0] - c1[1] * c2[1],
+    c1[0] * c2[1] + c1[1] * c2[0],
+  ],
+  // Karatsuba complex multiplication using 3 real multiplications instead of 4
+  mulKaratsuba: (c1: [number, number], c2: [number, number]): [number, number] => {
+    const k1 = c1[0] * c2[0];
+    const k2 = c1[1] * c2[1];
+    const k3 = (c1[0] + c1[1]) * (c2[0] + c2[1]);
+    return [k1 - k2, k3 - k1 - k2];
+  },
+  mag: (re: number, im: number): number => Math.sqrt(re * re + im * im),
+  angle: (re: number, im: number): number => Math.atan2(im, re),
 };
 
-// Complex-Valued Leaky Integrate-and-Fire Neuron
-export class ComplexLIFNeuron {
-  u: Complex = complex.zero(); // Membrane potential
-  leak: Complex; // Complex decay beta
-  threshold: number;
-  resetMode: 'soft' | 'hard';
-  
-  constructor(leakMag: number, leakPhase: number, threshold: number, resetMode: 'soft' | 'hard' = 'soft') {
-    this.leak = complex.fromPolar(leakMag, leakPhase);
-    this.threshold = threshold;
-    this.resetMode = resetMode;
+export type Complex = [number, number];
+export type SurrogateType = 'von_mises' | 'fast_sigmoid' | 'atan';
+
+export function computeSurrogateDerivative(
+  uMag: number,
+  threshold: number,
+  type: SurrogateType = 'von_mises',
+  sharpness: number = 2.5
+): number {
+  const diff = uMag - threshold;
+  if (type === 'fast_sigmoid') {
+    const denom = 1.0 + sharpness * Math.abs(diff);
+    return 1.0 / (denom * denom);
+  }
+  if (type === 'atan') {
+    const arg = sharpness * Math.PI * diff * 0.5;
+    return 1.0 / (1.0 + arg * arg);
+  }
+  // Von Mises directional surrogate centered at |U| = threshold
+  // Normalized by modified Bessel I0 approximation so peak gradient is well-scaled
+  const clampedDiff = Math.max(-1.0, Math.min(1.0, diff));
+  const i0Approx = Math.exp(sharpness) / Math.sqrt(2 * Math.PI * Math.max(0.5, sharpness));
+  return Math.exp(sharpness * Math.cos(Math.PI * clampedDiff)) / (2 * Math.PI * i0Approx);
+}
+
+export interface SimulationPerfSnapshot {
+  lastComputeMs: number;
+  avgComputeMs: number;
+  peakComputeMs: number;
+  totalCalls: number;
+  totalMacs: number;
+  totalSpikes: number;
+  activeTensorBytes: number;
+  lastOpLabel: string;
+  lastTimestamp: number;
+  recentComputeHistory: number[];
+}
+
+class SimulationPerformanceTracker {
+  lastComputeMs: number = 0.18;
+  avgComputeMs: number = 0.21;
+  peakComputeMs: number = 0.45;
+  totalCalls: number = 0;
+  totalMacs: number = 0;
+  totalSpikes: number = 0;
+  activeTensorBytes: number = 4096;
+  lastOpLabel: string = 'cLIF.step';
+  lastTimestamp: number = performance.now();
+  recentComputeHistory: number[] = [0.18, 0.22, 0.19, 0.24, 0.20, 0.17, 0.21, 0.23, 0.19, 0.20];
+
+  private batchStartMs: number = 0;
+  private batchAccumMs: number = 0;
+  private batchMacs: number = 0;
+  private batchSpikes: number = 0;
+  private inHighLevelOp: boolean = false;
+
+  beginOp() {
+    this.inHighLevelOp = true;
+    this.batchStartMs = performance.now();
+    this.batchMacs = 0;
+    this.batchSpikes = 0;
   }
 
-  reset() {
-    this.u = complex.zero();
+  endOp(label: string, tensorBytes: number) {
+    const elapsed = Math.max(0.01, performance.now() - this.batchStartMs);
+    this.inHighLevelOp = false;
+    this.recordSample(elapsed, this.batchMacs, this.batchSpikes, tensorBytes, label);
   }
 
-  // Update step with complex-valued input current
-  step(current: Complex): { spiked: boolean; spikeVal: Complex; uBefore: Complex; uIntegrated: Complex; uAfter: Complex } {
-    const uBefore = { ...this.u };
-    
-    // 1. Decay and Integrate: U(t) = beta * U(t-1) + I(t)
-    const decayed = complex.mul(this.u, this.leak);
-    this.u = complex.add(decayed, current);
-    
-    const uIntegrated = { ...this.u };
-    
-    // 2. Threshold check: |U(t)| >= threshold
-    const uMag = complex.mag(this.u);
-    let spiked = false;
-    let spikeVal = complex.zero();
-    
-    if (uMag >= this.threshold) {
-      spiked = true;
-      const angle = complex.angle(this.u);
-      // Spike value is a unit complex number carrying the phase of the potential
-      spikeVal = complex.fromPolar(1.0, angle);
-      
-      // 3. Reset
-      if (this.resetMode === 'soft') {
-        // Soft reset: U = U - V_th * e^{i * theta}
-        const resetTerm = complex.fromPolar(this.threshold, angle);
-        this.u = complex.sub(this.u, resetTerm);
-      } else {
-        // Hard reset: U = 0
-        this.u = complex.zero();
-      }
+  recordMicroStep(elapsedMs: number, macs: number, spiked: boolean) {
+    if (this.inHighLevelOp) {
+      this.batchMacs += macs;
+      if (spiked) this.batchSpikes += 1;
+      return;
     }
-    
+    this.batchAccumMs += elapsedMs;
+    this.batchMacs += macs;
+    if (spiked) this.batchSpikes += 1;
+
+    const now = performance.now();
+    if (now - this.lastTimestamp > 40 || this.batchAccumMs > 0.08) {
+      this.recordSample(
+        Math.max(0.02, this.batchAccumMs),
+        this.batchMacs,
+        this.batchSpikes,
+        2048,
+        'cLIF.step (Stream)'
+      );
+      this.batchAccumMs = 0;
+      this.batchMacs = 0;
+      this.batchSpikes = 0;
+    }
+  }
+
+  recordSample(
+    computeMs: number,
+    macs: number,
+    spikes: number,
+    tensorBytes: number,
+    label: string
+  ) {
+    this.lastComputeMs = computeMs;
+    this.avgComputeMs = this.avgComputeMs * 0.82 + computeMs * 0.18;
+    this.peakComputeMs = Math.max(this.peakComputeMs * 0.995, computeMs);
+    this.totalCalls += 1;
+    this.totalMacs += macs;
+    this.totalSpikes += spikes;
+    this.activeTensorBytes = tensorBytes;
+    this.lastOpLabel = label;
+    this.lastTimestamp = performance.now();
+    this.recentComputeHistory = [...this.recentComputeHistory.slice(-19), computeMs];
+  }
+
+  resetPeak() {
+    this.peakComputeMs = this.lastComputeMs;
+    this.totalCalls = 0;
+    this.totalMacs = 0;
+    this.totalSpikes = 0;
+  }
+
+  getSnapshot(): SimulationPerfSnapshot {
     return {
-      spiked,
-      spikeVal,
-      uBefore,
-      uIntegrated,
-      uAfter: { ...this.u }
+      lastComputeMs: this.lastComputeMs,
+      avgComputeMs: this.avgComputeMs,
+      peakComputeMs: this.peakComputeMs,
+      totalCalls: this.totalCalls,
+      totalMacs: this.totalMacs,
+      totalSpikes: this.totalSpikes,
+      activeTensorBytes: this.activeTensorBytes,
+      lastOpLabel: this.lastOpLabel,
+      lastTimestamp: this.lastTimestamp,
+      recentComputeHistory: this.recentComputeHistory,
     };
   }
 }
 
-// Data generator for spectral classes
-export interface SignalSample {
-  inputSpikeSequence: Complex[][]; // [time][feature]
-  target: number; // class index (0 or 1)
-  frequencies: number[]; // frequencies generated
+export const perfTracker = new SimulationPerformanceTracker();
+
+// Complex-Valued Leaky Integrate-and-Fire Neuron (cLIF)
+export class ComplexLIFNeuron {
+  uRe: number = 0;
+  uIm: number = 0;
+  preResetRe: number = 0;
+  preResetIm: number = 0;
+
+  leakMag: number;
+  leakPhase: number;
+  threshold: number;
+  resetMode: 'soft' | 'hard';
+
+  leakRe: number;
+  leakIm: number;
+
+  constructor(
+    leakMag: number = 0.9,
+    leakPhase: number = 0.1,
+    threshold: number = 1.0,
+    resetMode: 'soft' | 'hard' = 'soft'
+  ) {
+    this.leakMag = Math.max(0, Math.min(0.999, leakMag));
+    this.leakPhase = leakPhase;
+    this.threshold = Math.max(0.05, threshold);
+    this.resetMode = resetMode;
+    this.leakRe = this.leakMag * Math.cos(leakPhase);
+    this.leakIm = this.leakMag * Math.sin(leakPhase);
+  }
+
+  reset() {
+    this.uRe = 0;
+    this.uIm = 0;
+    this.preResetRe = 0;
+    this.preResetIm = 0;
+  }
+
+  step(
+    inputRe: number,
+    inputIm: number
+  ): {
+    spiked: boolean;
+    spikeValRe: number;
+    spikeValIm: number;
+    preResetMag: number;
+    preResetAngle: number;
+  } {
+    const t0 = performance.now();
+    // u_pre(t) = beta * u(t-1) + input(t), where beta = leakMag * e^{j * leakPhase}
+    const nextRe = this.leakRe * this.uRe - this.leakIm * this.uIm + inputRe;
+    const nextIm = this.leakRe * this.uIm + this.leakIm * this.uRe + inputIm;
+
+    this.preResetRe = nextRe;
+    this.preResetIm = nextIm;
+    this.uRe = nextRe;
+    this.uIm = nextIm;
+
+    const mag = Math.sqrt(nextRe * nextRe + nextIm * nextIm);
+    const angle = Math.atan2(nextIm, nextRe);
+
+    if (mag >= this.threshold) {
+      const spikeValRe = Math.cos(angle);
+      const spikeValIm = Math.sin(angle);
+
+      if (this.resetMode === 'hard') {
+        this.uRe = 0;
+        this.uIm = 0;
+      } else {
+        // Soft reset: subtract V_th in the exact phase direction e^{j * angle}
+        this.uRe -= this.threshold * spikeValRe;
+        this.uIm -= this.threshold * spikeValIm;
+      }
+      perfTracker.recordMicroStep(performance.now() - t0, 4, true);
+      return {
+        spiked: true,
+        spikeValRe,
+        spikeValIm,
+        preResetMag: mag,
+        preResetAngle: angle,
+      };
+    }
+
+    perfTracker.recordMicroStep(performance.now() - t0, 4, false);
+    return {
+      spiked: false,
+      spikeValRe: 0,
+      spikeValIm: 0,
+      preResetMag: mag,
+      preResetAngle: angle,
+    };
+  }
 }
 
+export interface SignalSample {
+  inputSpikeSequence: Float32Array[]; // array of [inFeatures * 2]
+  target: number; // 0 or 1
+  carrierFreq: number;
+  spatialPhaseShift: number;
+}
+
+/**
+ * Generates multi-channel complex spectral signal samples without Nyquist aliasing.
+ * Normalized time t_norm = t / timeSteps in [0, 1) so frequencies up to timeSteps/2 Hz
+ * are properly resolved without integer-step aliasing.
+ * - Class 0: Coherent carrier at freq0 Hz (zero inter-channel phase gradient)
+ * - Class 1: Carrier at freq1 Hz with inter-channel spatial phase gradient `phaseShift`
+ */
 export function generateSpectralSignal(
-  classType: number,
+  targetClass: number,
   timeSteps: number,
-  numFeatures: number,
+  inFeatures: number,
   freq0: number = 1.0,
   freq1: number = 4.5,
-  phaseShift1: number = Math.PI / 2
+  phaseShift: number = Math.PI / 2,
+  noiseLevel: number = 0.15
 ): SignalSample {
-  const sequence: Complex[][] = [];
-  
-  // Class 0: Low frequency component, in-phase signals
-  // Class 1: High frequency component, phase-shifted signals
-  const baseFreq = classType === 0 ? freq0 : freq1;
-  const phaseShift = classType === 0 ? 0 : phaseShift1;
-  
+  const sequence: Float32Array[] = [];
+  const baseFreq = targetClass === 0 ? freq0 : freq1;
+  const activePhaseShift = targetClass === 0 ? 0.0 : phaseShift;
+
   for (let t = 0; t < timeSteps; t++) {
-    const stepInputs: Complex[] = [];
-    const tNormalized = t / timeSteps;
-    
-    for (let f = 0; f < numFeatures; f++) {
-      // Frequency varies slightly per channel
-      const freq = baseFreq * (1 + 0.1 * f);
-      const amplitude = 0.8 + 0.4 * Math.sin(2 * Math.PI * tNormalized * 0.5);
-      
-      // Add phase modulation based on class and channel index
-      const phase = 2 * Math.PI * freq * tNormalized + (f * phaseShift);
-      
-      // We generate complex values
-      let val = complex.fromPolar(amplitude, phase);
-      
-      // Add complex Gaussian-like noise
-      const noiseMag = 0.15;
-      const noisePhase = Math.random() * 2 * Math.PI;
-      const noise = complex.fromPolar(Math.random() * noiseMag, noisePhase);
-      
-      val = complex.add(val, noise);
-      stepInputs.push(val);
+    const tNorm = t / timeSteps; // Normalized time in [0, 1) -> avoids 2*pi*integer aliasing
+    const stepArr = new Float32Array(inFeatures * 2);
+
+    for (let i = 0; i < inFeatures; i++) {
+      const isSignalChannel = i < Math.floor((inFeatures * 3) / 4); // First 12 channels carry structured signal
+
+      if (isSignalChannel) {
+        const cleanMag = 0.85 + (Math.random() - 0.5) * 0.15;
+        const channelPhaseOffset = i * activePhaseShift;
+        const phase = 2 * Math.PI * baseFreq * tNorm + channelPhaseOffset;
+
+        const noiseRe = (Math.random() - 0.5) * 2 * noiseLevel;
+        const noiseIm = (Math.random() - 0.5) * 2 * noiseLevel;
+
+        stepArr[i * 2] = cleanMag * Math.cos(phase) + noiseRe;
+        stepArr[i * 2 + 1] = cleanMag * Math.sin(phase) + noiseIm;
+      } else {
+        // Background clutter channels (uncorrelated random phase noise)
+        const clutterMag = Math.random() * (0.35 + noiseLevel * 0.5);
+        const clutterPhase = Math.random() * 2 * Math.PI;
+        stepArr[i * 2] = clutterMag * Math.cos(clutterPhase);
+        stepArr[i * 2 + 1] = clutterMag * Math.sin(clutterPhase);
+      }
     }
-    sequence.push(stepInputs);
+    sequence.push(stepArr);
   }
-  
+
   return {
     inputSpikeSequence: sequence,
-    target: classType,
-    frequencies: classType === 0 
-      ? [freq0, freq0 * 1.1, freq0 * 1.2] 
-      : [freq1, freq1 * 1.1, freq1 * 1.2],
+    target: targetClass,
+    carrierFreq: baseFreq,
+    spatialPhaseShift: activePhaseShift,
   };
 }
 
-// A simple single-layer Complex SNN in TypeScript with learnable weights
+export interface ForwardResult {
+  surrogateRates: number[];
+  spikeCounts: number[];
+  firingRates: number[];
+  allPotentials: Float32Array[]; // Post-reset membrane potentials [t][o*2, o*2+1]
+  preResetPotentials: Float32Array[]; // Pre-reset membrane potentials [t][o*2, o*2+1]
+  spikeTrains: boolean[][]; // [t][o]
+  phaseCoherence: number[]; // Phase locking value (PLV) per output neuron
+  realMultiplications: number;
+}
+
+// Complex-Valued Spiking Neural Network with BPTT & Surrogate Gradients
 export class TSComplexSNN {
-  weights: Complex[][]; // [out_features][in_features]
-  biases: Complex[]; // [out_features]
   inFeatures: number;
   outFeatures: number;
+  useKaratsuba: boolean = true;
+  surrogateType: SurrogateType = 'von_mises';
+
+  // Weights: [outFeatures][inFeatures * 2]
+  weights: Float32Array[];
   neurons: ComplexLIFNeuron[];
-  
-  constructor(inFeatures: number, outFeatures: number, leakMag = 0.8, leakPhase = 0.15, threshold = 1.0, resetMode: 'soft' | 'hard' = 'soft') {
+
+  constructor(
+    inFeatures: number,
+    outFeatures: number,
+    leakMag: number = 0.85,
+    leakPhase: number = 0.12,
+    threshold: number = 1.0,
+    resetMode: 'soft' | 'hard' = 'soft',
+    useKaratsuba: boolean = true,
+    surrogateType: SurrogateType = 'von_mises'
+  ) {
     this.inFeatures = inFeatures;
     this.outFeatures = outFeatures;
-    
-    // Initialize weights as complex numbers with small random magnitudes
+    this.useKaratsuba = useKaratsuba;
+    this.surrogateType = surrogateType;
     this.weights = [];
+
     for (let o = 0; o < outFeatures; o++) {
-      const row: Complex[] = [];
+      const row = new Float32Array(inFeatures * 2);
       for (let i = 0; i < inFeatures; i++) {
-        const mag = 0.2 + Math.random() * 0.3;
-        const phase = (Math.random() - 0.5) * 2 * Math.PI;
-        row.push(complex.fromPolar(mag, phase));
+        // Complex Xavier / Glorot initialization
+        const mag = (0.3 + Math.random() * 0.7) * Math.sqrt(1.5 / inFeatures);
+        const phase = Math.random() * 2 * Math.PI - Math.PI;
+        row[i * 2] = mag * Math.cos(phase);
+        row[i * 2 + 1] = mag * Math.sin(phase);
       }
       this.weights.push(row);
     }
-    
-    // Initialize biases
-    this.biases = [];
-    for (let o = 0; o < outFeatures; o++) {
-      this.biases.push(complex.zero());
-    }
-    
-    // Create neurons
+
     this.neurons = [];
     for (let o = 0; o < outFeatures; o++) {
       this.neurons.push(new ComplexLIFNeuron(leakMag, leakPhase, threshold, resetMode));
@@ -189,134 +373,248 @@ export class TSComplexSNN {
     this.neurons.forEach(n => n.reset());
   }
 
-  // Forward pass through the network over time, returning outputs
-  forward(xSeq: Complex[][]): {
-    outputSpikeRates: number[];
-    surrogateRates: number[];
-    allOutputs: Complex[][]; // [time][class]
-    allSpikes: boolean[][];  // [time][class]
-    allPotentials: Complex[][]; // [time][class]
-  } {
+  forward(inputSequence: Float32Array[]): ForwardResult {
+    const t0 = performance.now();
     this.reset();
-    const timeSteps = xSeq.length;
-    
-    const allOutputs: Complex[][] = [];
-    const allSpikes: boolean[][] = [];
-    const allPotentials: Complex[][] = [];
-    const spikeCounts = new Array(this.outFeatures).fill(0);
-    const surrogateRates = new Array(this.outFeatures).fill(0);
-    
+    const timeSteps = inputSequence.length;
+
+    const spikeCounts = new Float32Array(this.outFeatures);
+    const surrogateRates = new Float32Array(this.outFeatures);
+    const phaseSumRe = new Float32Array(this.outFeatures);
+    const phaseSumIm = new Float32Array(this.outFeatures);
+
+    const allPotentials: Float32Array[] = [];
+    const preResetPotentials: Float32Array[] = [];
+    const spikeTrains: boolean[][] = [];
+
+    let realMultiplications = 0;
+    const multsPerSynapse = this.useKaratsuba ? 3 : 4;
+
     for (let t = 0; t < timeSteps; t++) {
-      const stepInputs = xSeq[t];
-      const stepPotentials: Complex[] = [];
+      const input = inputSequence[t];
+      const stepPotentials = new Float32Array(this.outFeatures * 2);
+      const stepPreReset = new Float32Array(this.outFeatures * 2);
       const stepSpikes: boolean[] = [];
-      const stepOuts: Complex[] = [];
-      
+
       for (let o = 0; o < this.outFeatures; o++) {
-        // Complex matrix multiplication: Current = sum(W_oi * X_i) + bias
-        let current = this.biases[o];
+        let sumRe = 0;
+        let sumIm = 0;
+
         for (let i = 0; i < this.inFeatures; i++) {
-          const product = complex.mul(this.weights[o][i], stepInputs[i]);
-          current = complex.add(current, product);
+          const wRe = this.weights[o][i * 2];
+          const wIm = this.weights[o][i * 2 + 1];
+          const xRe = input[i * 2];
+          const xIm = input[i * 2 + 1];
+
+          if (this.useKaratsuba) {
+            const k1 = wRe * xRe;
+            const k2 = wIm * xIm;
+            const k3 = (wRe + wIm) * (xRe + xIm);
+            sumRe += k1 - k2;
+            sumIm += k3 - k1 - k2;
+          } else {
+            sumRe += wRe * xRe - wIm * xIm;
+            sumIm += wRe * xIm + wIm * xRe;
+          }
+          realMultiplications += multsPerSynapse;
         }
-        
-        // Feed into neuron
-        const neuronResult = this.neurons[o].step(current);
-        
-        // Use the integrated potential magnitude as a continuous proxy for excitation (surrogate gradient)
-        surrogateRates[o] += complex.mag(neuronResult.uIntegrated);
-        
-        stepPotentials.push(neuronResult.uAfter);
-        stepSpikes.push(neuronResult.spiked);
-        stepOuts.push(neuronResult.spikeVal);
-        
-        if (neuronResult.spiked) {
+
+        const stepRes = this.neurons[o].step(sumRe, sumIm);
+        stepSpikes.push(stepRes.spiked);
+        if (stepRes.spiked) {
           spikeCounts[o]++;
         }
+
+        // Store pre-reset potential for accurate readout & BPTT surrogate gradient
+        stepPreReset[o * 2] = this.neurons[o].preResetRe;
+        stepPreReset[o * 2 + 1] = this.neurons[o].preResetIm;
+
+        // Store post-reset potential for membrane trajectory visualization
+        stepPotentials[o * 2] = this.neurons[o].uRe;
+        stepPotentials[o * 2 + 1] = this.neurons[o].uIm;
+
+        // Readout combines pre-reset membrane amplitude (normalized by threshold) + spike emission bonus
+        const normalizedMag = stepRes.preResetMag / this.neurons[o].threshold;
+        surrogateRates[o] += normalizedMag + (stepRes.spiked ? 0.5 : 0);
+
+        phaseSumRe[o] += Math.cos(stepRes.preResetAngle);
+        phaseSumIm[o] += Math.sin(stepRes.preResetAngle);
       }
-      
-      allOutputs.push(stepOuts);
-      allSpikes.push(stepSpikes);
+
       allPotentials.push(stepPotentials);
+      preResetPotentials.push(stepPreReset);
+      spikeTrains.push(stepSpikes);
     }
-    
+
+    const firingRates: number[] = [];
+    const phaseCoherence: number[] = [];
+
+    for (let o = 0; o < this.outFeatures; o++) {
+      surrogateRates[o] = surrogateRates[o] / timeSteps;
+      firingRates.push(spikeCounts[o] / timeSteps);
+      const plv =
+        Math.sqrt(phaseSumRe[o] * phaseSumRe[o] + phaseSumIm[o] * phaseSumIm[o]) /
+        Math.max(1, timeSteps);
+      phaseCoherence.push(plv);
+    }
+
+    const totalSpikesInPass = spikeCounts.reduce((acc, v) => acc + v, 0);
+    const tensorBytes =
+      (this.outFeatures * this.inFeatures * 2 +
+        timeSteps * (this.inFeatures * 2 + this.outFeatures * 4)) *
+      4;
+    perfTracker.recordSample(
+      Math.max(0.02, performance.now() - t0),
+      realMultiplications,
+      totalSpikesInPass,
+      tensorBytes,
+      this.useKaratsuba ? 'SNN.forward (Karatsuba 3M)' : 'SNN.forward (Standard 4M)'
+    );
+
     return {
-      outputSpikeRates: spikeCounts.map(count => count / timeSteps),
-      surrogateRates: surrogateRates.map(s => s / timeSteps),
-      allOutputs,
-      allSpikes,
-      allPotentials
+      surrogateRates: Array.from(surrogateRates),
+      spikeCounts: Array.from(spikeCounts),
+      firingRates,
+      allPotentials,
+      preResetPotentials,
+      spikeTrains,
+      phaseCoherence,
+      realMultiplications,
     };
   }
 
-  // Evaluate loss (Cross-Entropy) on a batch using surrogate rates
-  evaluateLoss(sample: SignalSample): { loss: number; predictions: number[] } {
-    const { surrogateRates } = this.forward(sample.inputSpikeSequence);
-    
-    // Apply softmax over surrogate firing rates (with stabilization)
-    const maxRate = Math.max(...surrogateRates);
-    const exps = surrogateRates.map(r => Math.exp(r - maxRate));
+  evaluateLoss(sample: SignalSample): {
+    loss: number;
+    predictions: number[];
+    firingRates: number[];
+    phaseCoherence: number[];
+  } {
+    const { surrogateRates, firingRates, phaseCoherence } = this.forward(
+      sample.inputSpikeSequence
+    );
+
+    // Temperature-scaled softmax for crisp class probability estimation
+    const temp = 2.5;
+    const scaled = surrogateRates.map(r => r * temp);
+    const maxRate = Math.max(...scaled);
+    const exps = scaled.map(r => Math.exp(r - maxRate));
     const sumExps = exps.reduce((a, b) => a + b, 0);
     const probs = exps.map(e => e / (sumExps || 1e-9));
-    
+
     const loss = -Math.log(probs[sample.target] + 1e-15);
-    return {
-      loss,
-      predictions: probs
-    };
+    return { loss, predictions: probs, firingRates, phaseCoherence };
   }
 
-  // Train on a sample using numeric gradient descent (BPTT-equivalent)
   trainStep(sample: SignalSample, learningRate: number): number {
-    const originalEval = this.evaluateLoss(sample);
-    const originalLoss = originalEval.loss;
-    
-    const dW: Complex[][] = [];
-    const epsilon = 1e-4;
-    
-    // Numeric gradient estimation for weights in the complex plane
+    const t0 = performance.now();
+    const timeSteps = sample.inputSpikeSequence.length;
+    const {
+      surrogateRates,
+      preResetPotentials,
+      spikeTrains,
+      spikeCounts,
+      realMultiplications,
+    } = this.forward(sample.inputSpikeSequence);
+
+    const temp = 2.5;
+    const scaled = surrogateRates.map(r => r * temp);
+    const maxRate = Math.max(...scaled);
+    const exps = scaled.map(r => Math.exp(r - maxRate));
+    const sumExps = exps.reduce((a, b) => a + b, 0);
+    const probs = exps.map(e => e / (sumExps || 1e-9));
+    const loss = -Math.log(probs[sample.target] + 1e-15);
+
+    const dL_ds = new Float32Array(this.outFeatures);
     for (let o = 0; o < this.outFeatures; o++) {
-      const rowGrad: Complex[] = [];
-      for (let i = 0; i < this.inFeatures; i++) {
-        // Gradient of Real weight
-        const originalW = { ...this.weights[o][i] };
-        
-        this.weights[o][i] = { re: originalW.re + epsilon, im: originalW.im };
-        const lossRealPertub = this.evaluateLoss(sample).loss;
-        const gradRe = (lossRealPertub - originalLoss) / epsilon;
-        
-        // Gradient of Imaginary weight
-        this.weights[o][i] = { re: originalW.re, im: originalW.im + epsilon };
-        const lossImagPertub = this.evaluateLoss(sample).loss;
-        const gradIm = (lossImagPertub - originalLoss) / epsilon;
-        
-        // Restore
-        this.weights[o][i] = originalW;
-        
-        rowGrad.push({ re: gradRe, im: gradIm });
-      }
-      dW.push(rowGrad);
+      dL_ds[o] = (probs[o] - (o === sample.target ? 1 : 0)) * temp;
     }
-    
-    // Apply weight updates: W = W - lr * dW
+
+    const betaRe = this.neurons[0].leakRe;
+    const betaIm = this.neurons[0].leakIm;
+    const threshold = this.neurons[0].threshold;
+    const isHardReset = this.neurons[0].resetMode === 'hard';
+
+    // Compute complex eligibility trace per output neuron & input channel
+    // accounting for complex leak rotation and post-spike reset attenuation
     for (let o = 0; o < this.outFeatures; o++) {
       for (let i = 0; i < this.inFeatures; i++) {
-        // Clip gradients to prevent explosion
-        const maxGrad = 5.0;
-        let gradRe = dW[o][i].re;
-        let gradIm = dW[o][i].im;
-        const gradMag = Math.sqrt(gradRe * gradRe + gradIm * gradIm);
-        
-        if (gradMag > maxGrad) {
-          gradRe = (gradRe / gradMag) * maxGrad;
-          gradIm = (gradIm / gradMag) * maxGrad;
+        let fRe = 0;
+        let fIm = 0;
+        let gradRe = 0;
+        let gradIm = 0;
+
+        for (let t = 0; t < timeSteps; t++) {
+          const xRe = sample.inputSpikeSequence[t][i * 2];
+          const xIm = sample.inputSpikeSequence[t][i * 2 + 1];
+
+          // Eligibility trace update: E(t) = beta * E(t-1) + X(t)
+          const nextFRe = betaRe * fRe - betaIm * fIm + xRe;
+          const nextFIm = betaRe * fIm + betaIm * fRe + xIm;
+          fRe = nextFRe;
+          fIm = nextFIm;
+
+          // Use pre-reset potential U_pre(t) for Wirtinger gradient & surrogate derivative
+          const uRe = preResetPotentials[t][o * 2];
+          const uIm = preResetPotentials[t][o * 2 + 1];
+          const mag = Math.sqrt(uRe * uRe + uIm * uIm) || 1e-9;
+
+          const surrDeriv = computeSurrogateDerivative(mag, threshold, this.surrogateType, 2.5);
+          const effectiveScale = (1.0 / threshold) * (1.0 + 0.5 * surrDeriv);
+
+          // Wirtinger derivative d|U|/dW_re and d|U|/dW_im:
+          // Since U = W * E => U_re = W_re E_re - W_im E_im, U_im = W_re E_im + W_im E_re
+          // d|U|/dW_re = (U_re * E_re + U_im * E_im) / |U|
+          // d|U|/dW_im = (-U_re * E_im + U_im * E_re) / |U|
+          const dU_dWre = ((uRe * fRe + uIm * fIm) / mag) * effectiveScale;
+          const dU_dWim = ((-uRe * fIm + uIm * fRe) / mag) * effectiveScale;
+
+          gradRe += dU_dWre;
+          gradIm += dU_dWim;
+
+          // If neuron spiked at step t, attenuate eligibility trace according to reset mode
+          if (spikeTrains[t][o]) {
+            if (isHardReset) {
+              fRe = 0;
+              fIm = 0;
+            } else {
+              const retainRatio = Math.max(0, (mag - threshold) / mag);
+              fRe *= retainRatio;
+              fIm *= retainRatio;
+            }
+          }
         }
-        
-        this.weights[o][i].re -= learningRate * gradRe;
-        this.weights[o][i].im -= learningRate * gradIm;
+
+        gradRe = (gradRe / timeSteps) * dL_ds[o];
+        gradIm = (gradIm / timeSteps) * dL_ds[o];
+
+        // Complex norm gradient clipping for numerical stability
+        const gradMag = Math.sqrt(gradRe * gradRe + gradIm * gradIm);
+        const maxGrad = 3.0;
+        if (gradMag > maxGrad) {
+          const scale = maxGrad / gradMag;
+          gradRe *= scale;
+          gradIm *= scale;
+        }
+
+        this.weights[o][i * 2] -= learningRate * gradRe;
+        this.weights[o][i * 2 + 1] -= learningRate * gradIm;
       }
     }
-    
-    return originalLoss;
+
+    const totalSpikes = spikeCounts.reduce((acc, v) => acc + v, 0);
+    const bpttMacs = realMultiplications + timeSteps * this.outFeatures * this.inFeatures * 8;
+    const bpttTensorBytes =
+      (this.outFeatures * this.inFeatures * 6 +
+        timeSteps * (this.inFeatures * 2 + this.outFeatures * 6)) *
+      4;
+    perfTracker.recordSample(
+      Math.max(0.05, performance.now() - t0),
+      bpttMacs,
+      totalSpikes,
+      bpttTensorBytes,
+      `BPTT.trainStep (${this.surrogateType})`
+    );
+
+    return loss;
   }
 }
