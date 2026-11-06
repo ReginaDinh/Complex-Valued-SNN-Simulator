@@ -1,0 +1,614 @@
+## PROMPT 3 — Hiển thị, nhãn, nội dung, dọn dẹp
+
+> Quy tắc chung cho Gemini: sửa ĐÚNG phạm vi từng mục, giữ nguyên class Tailwind/màu/bố cục và song ngữ vi/en. Số dòng là xấp xỉ — hãy tìm theo đoạn "Code hiện tại". Áp dụng mục 3.8 SAU khi đã làm Prompt 1 mục 8 (biến `s`).
+
+---
+
+### 3.1 Sơ đồ vector bị lệch tâm và bị cắt — `src/components/SNNComparison.tsx:71-93, 317-358`
+- **Vấn đề:** `SVG_CENTER = 150` nhưng SVG 260×260 và trục, vòng tròn đơn vị, điểm gốc mọi `<line>` đều cứng ở `130` → đầu mút mọi vector lệch +20px phải và +20px xuống (vector 0° trông chúc xuống, vector tổng không xuất phát từ gốc). Ngoài ra |A|,|B| tối đa 1.2 (slider) → |A+B| tối đa 2.4 × 70 = 168px > nửa SVG 130px → vector tổng bị cắt. Comment "scale factor is 80 (since max mag is 1.5)" sai.
+- **Code hiện tại:**
+  ```ts
+  // Center is (150, 150), scale factor is 80 (since max mag is 1.5)
+  const SVG_CENTER = 150;
+  const SVG_SCALE = 70;
+  ```
+  ```tsx
+  <line x1="130" y1="10" x2="130" y2="250" ... />
+  <line x1="10" y1="130" x2="250" y2="130" ... />
+  <circle cx="130" cy="130" r={SVG_SCALE} ... />
+  <line x1="130" y1="130" x2={coordA.x} ... />   // và 2 chỗ x1="130" y1="130" khác (vector B gốc, vector Sum)
+  ```
+- **Thay bằng:**
+  ```ts
+  // SVG is 260×260 → center (130, 130). Max |A+B| = 1.2 + 1.2 = 2.4 → 2.4 × 50 = 120px fits inside the 130px half-width.
+  const SVG_SIZE = 260;
+  const SVG_CENTER = SVG_SIZE / 2;
+  const SVG_SCALE = 50;
+  ```
+  ```tsx
+  <svg width={SVG_SIZE} height={SVG_SIZE} className="bg-[#0b1016]/90 border border-elegant-muted/5 rounded-xl">
+    <line x1={SVG_CENTER} y1="10" x2={SVG_CENTER} y2={SVG_SIZE - 10} stroke="#1d2836" strokeWidth="1" strokeDasharray="3 3" />
+    <line x1="10" y1={SVG_CENTER} x2={SVG_SIZE - 10} y2={SVG_CENTER} stroke="#1d2836" strokeWidth="1" strokeDasharray="3 3" />
+    <circle cx={SVG_CENTER} cy={SVG_CENTER} r={SVG_SCALE} fill="none" stroke="#253545" strokeWidth="1" />
+    <text x={SVG_CENTER + 5} y="24" ...>...</text>
+    <text x={SVG_CENTER + 60} y={SVG_CENTER - 5} ...>...</text>
+    {/* Mọi x1="130" y1="130" → x1={SVG_CENTER} y1={SVG_CENTER} (vector A, vector B gốc, vector Sum) */}
+  ```
+- **Vì sao đây là cách tốt nhất:** một nguồn sự thật duy nhất (`SVG_CENTER` suy ra từ `SVG_SIZE`) loại bỏ hẳn lớp lỗi "số cứng lệch nhau"; scale 50 được chọn từ giới hạn slider nên không bao giờ cắt mà không cần clamp làm sai hình.
+- **Kiểm tra:** A = 1.2∠0°, B = 1.2∠0° → vector tổng nằm ngang đúng trên trục Re, đầu mút cách mép phải ~10px, không bị cắt. A = 0.8∠90° → vector thẳng đứng trùng trục Im. Grep file không còn chuỗi `"130"`.
+
+---
+
+### 3.2 Nhãn giao thoa sai — `src/components/SNNComparison.tsx:395-399`
+- **Vấn đề:** so sánh `Math.abs(phaseA - phaseB) === 180` không xét biên độ: A = 0.8∠0°, B = 0.4∠180° hiển thị "Triệt tiêu hoàn toàn" trong khi |sum| = 0.40. Phase slider 0–360 nên A = 0°, B = 360° (cùng pha) lại hiện "Giao thoa bán phần".
+- **Code hiện tại:**
+  ```tsx
+  {Math.abs(phaseA - phaseB) === 180
+    ? (isEn ? 'Complete Cancellation' : 'Triệt tiêu hoàn toàn')
+    : Math.abs(phaseA - phaseB) === 0
+      ? (isEn ? 'Maximum In-Phase' : 'Đồng pha tối đa')
+      : (isEn ? 'Partial Interference' : 'Giao thoa bán phần')}
+  ```
+- **Thay bằng:** thêm `useMemo` ngay sau `sumPhase`:
+  ```ts
+  // Interference classification based on the actual vector result, not raw slider values.
+  // coherence = |A+B| / (|A|+|B|) ∈ [0, 1]: 1 = fully constructive, 0 = full cancellation.
+  const interference = useMemo(() => {
+    const EPS = 1e-6;
+    const coherence = sumMag / Math.max(EPS, magA + magB);
+    if (sumMag < EPS) return { en: 'Complete Cancellation', vi: 'Triệt tiêu hoàn toàn' };
+    if (coherence > 1 - EPS) return { en: 'Maximum In-Phase', vi: 'Đồng pha tối đa' };
+    if (coherence < Math.abs(magA - magB) / Math.max(EPS, magA + magB) + EPS)
+      return { en: 'Anti-Phase (Partial Cancellation)', vi: 'Ngược pha (triệt tiêu một phần)' };
+    return coherence >= Math.SQRT1_2
+      ? { en: 'Constructive Interference', vi: 'Giao thoa tăng cường' }
+      : { en: 'Destructive Interference', vi: 'Giao thoa triệt tiêu' };
+  }, [sumMag, magA, magB]);
+  ```
+  và trong JSX:
+  ```tsx
+  <span>{isEn ? interference.en : interference.vi}</span>
+  ```
+- **Vì sao đây là cách tốt nhất:** phân loại dựa trên kết quả vector thật (|A+B| so với cận trên |A|+|B| và cận dưới ||A|−|B||) nên tự động đúng với mọi biên độ, xử lý được 0°≡360° và sai số dấu phẩy động mà không cần so sánh góc bằng `===`.
+- **Kiểm tra:** 0.8∠0° + 0.8∠180° → "Triệt tiêu hoàn toàn"; 0.8∠0° + 0.4∠180° → "Ngược pha (triệt tiêu một phần)"; 0.8∠0° + 0.8∠360° → "Đồng pha tối đa"; 0.8∠0° + 0.8∠90° → "Giao thoa tăng cường" (coherence = 0.707); 0.8∠0° + 0.8∠135° → "Giao thoa triệt tiêu".
+
+---
+
+### 3.3 Pha tổng vô nghĩa khi vector tổng = 0 — `src/components/SNNComparison.tsx:61-65, 393`
+- **Vấn đề:** 0.8∠0° + 0.8∠180° cho `im ≈ 9.8e-17`, `atan2` trả 90° → UI hiển thị "Góc pha tổng: 90°" cho vector không.
+- **Code hiện tại:**
+  ```ts
+  const sumPhase = useMemo(() => {
+    let angle = Math.atan2(complexSum.im, complexSum.re) * (180 / Math.PI);
+    if (angle < 0) angle += 360;
+    return angle;
+  }, [complexSum]);
+  ```
+  ```tsx
+  <span>{isEn ? `Total phase angle: ${sumPhase.toFixed(0)}°` : `Góc pha tổng: ${sumPhase.toFixed(0)}°`}</span>
+  ```
+- **Thay bằng:**
+  ```ts
+  // Phase of a (numerically) zero vector is undefined → null.
+  const sumPhase = useMemo<number | null>(() => {
+    if (sumMag < 1e-6) return null;
+    let angle = Math.atan2(complexSum.im, complexSum.re) * (180 / Math.PI);
+    if (angle < 0) angle += 360;
+    return angle;
+  }, [complexSum, sumMag]);
+  ```
+  ```tsx
+  <span>
+    {isEn ? 'Total phase angle: ' : 'Góc pha tổng: '}
+    {sumPhase === null ? (isEn ? '— (undefined)' : '— (không xác định)') : `${sumPhase.toFixed(0)}°`}
+  </span>
+  ```
+  (Nếu `sumPhase` được dùng ở chỗ khác, xử lý `null` tương tự.)
+- **Vì sao đây là cách tốt nhất:** pha của vector 0 không xác định về mặt toán học; trả `null` bắt buộc mọi nơi dùng phải xử lý trường hợp này (TypeScript sẽ báo), thay vì che giấu bằng một con số giả.
+- **Kiểm tra:** 0.8∠0° + 0.8∠180° → "Góc pha tổng: — (không xác định)". 0.8∠0° + 0.8∠90° → 45°.
+
+---
+
+### 3.4 Mã TeX hiện dạng chữ thô — `src/components/SNNComparison.tsx:660-760` (dữ liệu), `~1004, ~1021` (render)
+- **Vấn đề:** `title` và `explanation` trong `complexNodeDetails`/`traditionalNodeDetails` chứa TeX (`\\Sigma`, `|U| \\ge \\theta`, `\\phi_i`, `\\omega`, `\\lambda`, `\\theta_{thres}`) nhưng render bằng `{selectedData.title}` / `{selectedData.explanation}` → người dùng thấy nguyên chuỗi `\Sigma`, `\ge`.
+- **Code hiện tại:**
+  ```ts
+  title: isEn ? "Dendritic Summation (\\Sigma)" : "Tích Hợp Nhánh Cây (Dendritic Summation - \\Sigma)",
+  explanation: isEn ? "... its timing shifts by phase angle \\phi_i. ..." : "...",
+  ```
+  ```tsx
+  <h4 className="text-sm font-bold text-white font-display leading-tight">{selectedData.title}</h4>
+  ...
+  <p className="text-elegant-text/90 leading-relaxed text-[11.5px]">{selectedData.explanation}</p>
+  ```
+- **Thay bằng:**
+  1) Thêm helper ở đầu file (ngoài component, `InlineMath` đã được import):
+  ```tsx
+  // Renders plain text where math segments are wrapped in $...$ (KaTeX inline).
+  function renderWithMath(text: string): React.ReactNode {
+    const parts = text.split(/\$([^$]+)\$/g);
+    return parts.map((part, i) =>
+      i % 2 === 1 ? <InlineMath key={i} math={part} /> : <React.Fragment key={i}>{part}</React.Fragment>
+    );
+  }
+  ```
+  2) Bọc MỌI đoạn toán trong `title` và `explanation` của cả hai object bằng `$...$` (giữ `\\` trong chuỗi JS). Đồng thời đổi ký hiệu ngưỡng sang `V_{th}` (xem 3.16). Ví dụ đầy đủ các chỗ cần đổi:
+  ```ts
+  // complexNodeDetails
+  inputs.title:    'Input Spikes ($s_i(t)$)'                  / 'Luồng Xung Đầu Vào (Input Spikes - $s_i(t)$)'
+  weights.title:   'Complex Synapse Weights ($W_i$)'          / 'Trọng Số Synapse Số Phức (Complex Weights - $W_i$)'
+  weights.explanation: '... scales by $M_i$, and its timing shifts by phase angle $\\phi_i$. ...' (vi tương tự: '$M_i$', '$\\phi_i$')
+  dendrite.title:  'Dendritic Summation ($\\Sigma$)'          / 'Tích Hợp Nhánh Cây (Dendritic Summation - $\\Sigma$)'
+  soma.title:      'cLIF Membrane Potential ($U(t)$)'         / 'Điện Thế Màng cLIF (Membrane Potential - $U(t)$)'
+  soma.explanation: '... complex number $U(t)$ ... rotating phase by $\\omega$ ...' (vi: '$U(t) = V(t) + jY(t)$', '$\\omega$')
+  threshold.title: 'Circular Thresholding ($|U| \\ge V_{th}$)' / 'Bộ So Ngưỡng Vòng Tròn (Circular Thresholding - $|U| \\ge V_{th}$)'
+  threshold.explanation: '... circular boundary of radius $V_{th}$ ...' (vi: '$V_{th}$', '$|U(t)|$')
+  // traditionalNodeDetails
+  inputs.title / weights.title / dendrite.title / soma.title ($V(t)$) — như trên
+  weights.explanation: '$W_i$'; soma.explanation: '$V(t)$', '$\\lambda$'
+  threshold.title: 'Linear Thresholding ($V \\ge V_{th}$)' / 'Bộ So Ngưỡng Tuyến Tính (Linear Thresholding - $V \\ge V_{th}$)'
+  threshold.explanation: '$V(t)$', '$V_{th}$', '$V_{reset}$'
+  ```
+  3) Render:
+  ```tsx
+  <h4 className="text-sm font-bold text-white font-display leading-tight">{renderWithMath(selectedData.title)}</h4>
+  ...
+  <p className="text-elegant-text/90 leading-relaxed text-[11.5px]">{renderWithMath(selectedData.explanation)}</p>
+  ```
+- **Vì sao đây là cách tốt nhất:** dùng lại `react-katex` đã có (cùng font/kiểu với `BlockMath` ngay bên dưới), cú pháp `$...$` là quy ước chuẩn của LaTeX nên dữ liệu vẫn dễ đọc/sửa; Unicode thay thế sẽ không hiển thị được chỉ số dưới như `V_{th}`, `\phi_i`.
+- **Kiểm tra:** chọn từng node (inputs, weights, dendrite, soma, threshold) ở cả hai kiến trúc → không còn ký tự `\` hay `_{` nào hiển thị thô; Σ, φᵢ, ω, λ, V_th hiện bằng font KaTeX. Grep: mọi `\\` trong `title`/`explanation` đều nằm giữa hai dấu `$`.
+
+---
+
+### 3.5 Đơn vị "Hz" sai — `src/components/NetworkTab.tsx:506, 522, 732-733`
+- **Vấn đề:** `generateSpectralSignal` dùng `tNorm = t / timeSteps`, tức pha = 2π·f·(t/T). `f` là số chu kỳ trên toàn cửa sổ T = 30 bước, không có tần số lấy mẫu nên "Hz" vô nghĩa.
+- **Code hiện tại:**
+  ```tsx
+  <span className="text-elegant-cyan font-bold">{class0Freq.toFixed(1)} Hz (Δφ = 0°)</span>
+  <span className="text-amber-400 font-bold">{class1Freq.toFixed(1)} Hz</span>
+  `Active Sample: Class ${currentSample.target} (fc = ${currentSample.carrierFreq}Hz, ...`
+  `Mẫu đang thử: Lớp ${currentSample.target} (fc = ${currentSample.carrierFreq}Hz, ...`
+  ```
+- **Thay bằng:**
+  ```tsx
+  <span className="text-elegant-cyan font-bold">{class0Freq.toFixed(1)} {isEn ? 'cyc/window' : 'chu kỳ/cửa sổ'} (Δφ = 0°)</span>
+  <span className="text-amber-400 font-bold">{class1Freq.toFixed(1)} {isEn ? 'cyc/window' : 'chu kỳ/cửa sổ'}</span>
+  `Active Sample: Class ${currentSample.target} (fc = ${currentSample.carrierFreq.toFixed(1)} cyc/window, Δφ = ...`
+  `Mẫu đang thử: Lớp ${currentSample.target} (fc = ${currentSample.carrierFreq.toFixed(1)} chu kỳ/cửa sổ, Δφ = ...`
+  ```
+  Đồng thời sửa comment trong `src/simulationEngine.ts:262` "frequencies up to timeSteps/2 Hz" → "frequencies up to timeSteps/2 cycles per window".
+- **Vì sao đây là cách tốt nhất:** đơn vị đúng với công thức thực tế mà không phải bịa ra một sample rate; `toFixed(1)` tránh hiển thị `4.499999`.
+- **Kiểm tra:** grep `Hz` trong `NetworkTab.tsx` → 0 kết quả liên quan tới tần số sóng mang.
+
+---
+
+### 3.6 Nhãn ma trận nhầm lẫn sai — `src/components/NetworkTab.tsx:32, 1122-1131`
+- **Vấn đề:** ma trận là `cm[target][pred]`. Coi Class 1 là positive thì `[0][1]` = FP, `[1][0]` = FN (đã đúng) nhưng `[0][0]` phải là **TN**, không phải TP. Comment kiểu ở dòng 32 cũng sai.
+- **Code hiện tại:**
+  ```ts
+  confusionMatrix: [[number, number], [number, number]]; // [[TP0, FP1], [FN0, TP1]]
+  ```
+  ```tsx
+  TP (C0→C0): <strong>{benchmark.confusionMatrix[0][0]}</strong>
+  ```
+- **Thay bằng:**
+  ```ts
+  confusionMatrix: [[number, number], [number, number]]; // cm[target][pred], Class 1 = positive: [[TN, FP], [FN, TP]]
+  ```
+  ```tsx
+  TN (C0→C0): <strong>{benchmark.confusionMatrix[0][0]}</strong>
+  ```
+  (Giữ nguyên FP (C0→C1), FN (C1→C0), TP (C1→C1).)
+- **Vì sao đây là cách tốt nhất:** khớp quy ước chuẩn của confusion matrix nhị phân, sửa tối thiểu, giữ được màu xanh (đúng) / đỏ (sai) hiện có.
+- **Kiểm tra:** 4 ô đọc lần lượt TN, FP, FN, TP; tổng 4 ô = số mẫu test.
+
+---
+
+### 3.7 `Math.max` bị tính lại cho mỗi điểm — `src/components/NetworkTab.tsx:~689`
+- **Vấn đề:** `Math.max(...trainingLossHistory, 1.2)` nằm trong `.map` → O(n²) và tạo mảng spread mỗi điểm mỗi render.
+- **Code hiện tại:**
+  ```tsx
+  d={trainingLossHistory
+    .map((loss, idx) => {
+      const maxLoss = Math.max(...trainingLossHistory, 1.2);
+  ```
+- **Thay bằng:** ở thân component (trước `return`):
+  ```ts
+  const maxLossForChart = useMemo(() => Math.max(1.2, ...trainingLossHistory), [trainingLossHistory]);
+  ```
+  và trong `.map` xóa dòng `const maxLoss = ...`, đổi `loss / maxLoss` thành `loss / maxLossForChart`. Nếu có đường validation/biểu đồ khác dùng cùng pattern, áp dụng tương tự. (`useMemo` cần được import từ `react` nếu chưa có.)
+- **Vì sao đây là cách tốt nhất:** tính đúng một lần mỗi khi lịch sử thay đổi; kết quả vẽ y hệt cũ.
+- **Kiểm tra:** biểu đồ loss trông giống hệt trước khi sửa.
+
+---
+
+### 3.8 Biểu đồ thời gian vẽ ±Vth trên Re/Im gây hiểu sai — `src/components/NeuronTab.tsx:~250-295` và legend `~640-660`
+- **Vấn đề:** ngưỡng áp lên |U|, không phải lên Re hoặc Im riêng lẻ. Vẽ đường ±Vth cạnh trace Re/Im khiến người xem tưởng neuron bắn khi Re vượt Vth, trong khi Re, Im có thể đều < Vth mà |U| ≥ Vth (ví dụ Re = Im = 0.75, Vth = 1).
+- **Tiền đề:** đã áp dụng Prompt 1 mục 1.8 (có biến `th`, `pts`, `ySc` và hai đường `threshY_top`/`threshY_bot`).
+- **Thay bằng:**
+  1. Trong vòng tính `peak` của mục 1.8, đổi dòng
+     ```ts
+                peak = Math.max(peak, Math.abs(re), Math.abs(im));
+     ```
+     thành (vì |U| ≥ |Re|, |Im| và giờ ta vẽ cả |U|):
+     ```ts
+                peak = Math.max(peak, Math.hypot(re, im));
+     ```
+  2. Thay khối vẽ hai đường ±Vth + 2 nhãn của mục 1.8 bằng một đường duy nhất cho ngưỡng biên độ:
+     ```ts
+              // Threshold applies to |U| only → one line at +Vth, labelled as a magnitude threshold
+              const threshY = h / 2 - th * ySc;
+              tCtx.strokeStyle = 'rgba(248, 113, 113, 0.4)';
+              tCtx.setLineDash([4, 4]);
+              tCtx.beginPath();
+              tCtx.moveTo(0, threshY);
+              tCtx.lineTo(w, threshY);
+              tCtx.stroke();
+              tCtx.setLineDash([]);
+
+              tCtx.fillStyle = '#F87171';
+              tCtx.font = '9px monospace';
+              tCtx.fillText(`|U| = Vth (${th.toFixed(2)})`, 5, threshY - 4);
+     ```
+  3. Sau hai vòng vẽ Re/Im, thêm trace |U| (cùng thang `ySc`; dùng đúng biến bước ngang `dx` mà vòng Re/Im đang dùng — nếu tên khác thì dùng tên đó):
+     ```ts
+              // Magnitude |U| (pre-reset at spike steps) — the quantity actually compared against Vth
+              tCtx.beginPath();
+              tCtx.strokeStyle = '#E5E7EB';
+              tCtx.lineWidth = 1.4;
+              tCtx.setLineDash([3, 2]);
+              for (let i = 0; i < pts.length; i++) {
+                const x = i * dx;
+                const re = pts[i].spiked ? pts[i].preRe : pts[i].uRe;
+                const im = pts[i].spiked ? pts[i].preIm : pts[i].uIm;
+                const y = h / 2 - Math.hypot(re, im) * ySc;
+                if (i === 0) tCtx.moveTo(x, y);
+                else tCtx.lineTo(x, y);
+              }
+              tCtx.stroke();
+              tCtx.setLineDash([]);
+     ```
+  4. Legend (sau mục "Imaginary Potential (Y)"):
+     ```tsx
+     <div className="flex items-center gap-1.5">
+       <span className="w-3.5 h-1 bg-[#E5E7EB] inline-block rounded"></span>
+       <span className="text-elegant-text">
+         {isEn ? 'Magnitude |U| (compared to Vth)' : 'Biên độ |U| (so với Vth)'}
+       </span>
+     </div>
+     ```
+     và đổi nhãn đỏ thành `{isEn ? 'Spike / |U| Threshold' : 'Sự kiện Xung / Ngưỡng |U|'}`.
+- **Vì sao đây là cách tốt nhất:** vẽ đúng đại lượng được so ngưỡng (|U|) trên cùng thang tự co giãn với Re/Im, nên spike luôn xảy ra đúng lúc trace |U| chạm đường Vth, và không bao giờ tràn canvas.
+- **Kiểm tra:** Leak Phase lớn, input AC → mọi cột spike đỏ trùng lúc trace |U| (trắng nét đứt) chạm/vượt đường Vth; Re/Im có thể chưa chạm. Vth = 2.0 + input Pulse → đường ngưỡng và cả 3 trace vẫn nằm trong canvas.
+
+---
+
+### 3.9 Code PyTorch hiển thị (`src/pytorchCode.ts`) + đồng bộ với engine JS
+
+#### 3.9a Surrogate rò gradient pha qua neuron không bắn — `src/pytorchCode.ts:16-25, 28-48`
+- **Vấn đề:** forward trả `S = H(|u| − V_th) · u/|u|`, nên với neuron không bắn S ≡ 0 và gradient theo pha phải bằng 0. Thành phần tiếp tuyến (pha) trong backward không có mask → mọi neuron im lặng vẫn nhận 0.25× gradient pha, làm gradient sai lệch.
+- **Code hiện tại:**
+  ```python
+  ctx.save_for_backward(u, magnitude, unit_phasor)
+  ...
+  u, magnitude, unit_phasor = ctx.saved_tensors
+  ...
+  tangential_proj = torch.imag(grad_output * torch.conj(unit_phasor)) / (magnitude + threshold)
+  ```
+- **Thay bằng:**
+  ```python
+  ctx.save_for_backward(u, magnitude, unit_phasor, spikes_fired)
+  ...
+  u, magnitude, unit_phasor, spikes_fired = ctx.saved_tensors
+  ...
+  # Phase (tangential) gradient exists only where a spike was actually emitted:
+  # for silent neurons the forward output is identically 0, so d(output)/d(phase) = 0.
+  tangential_proj = spikes_fired * torch.imag(grad_output * torch.conj(unit_phasor)) / (magnitude + threshold)
+  ```
+  (Thành phần radial `surrogate_radial * radial_proj` giữ nguyên, KHÔNG mask — đó chính là surrogate cho bước nhảy ngưỡng.)
+- **Vì sao đây là cách tốt nhất:** radial dùng surrogate (vì H không khả vi) còn tiếp tuyến là đạo hàm thật của `u/|u|`, vốn chỉ tồn tại khi spike được phát; đây là sửa đúng toán, tối thiểu, không đổi API.
+- **Kiểm tra:** chạy code Python (`python snn.py`) không lỗi; `torch.autograd.gradcheck` không áp dụng được (surrogate), nhưng kiểm tra: với `u` có `|u| < V_th` ở mọi phần tử, `grad_u.imag` theo hướng tiếp tuyến = 0 (tức `torch.imag(grad_u * conj(unit_phasor)) == 0`).
+
+#### 3.9b Trục thời gian có cả điểm cuối — `src/pytorchCode.ts:~229`
+- **Vấn đề:** `torch.linspace(0, 1, time_steps)` gồm cả 1.0 → mâu thuẫn comment "[0, 1)" và engine JS (`t / timeSteps`); với freq = 1.0 mẫu cuối lặp lại pha của mẫu đầu.
+- **Code hiện tại:**
+  ```python
+  t_norm = torch.linspace(0, 1, time_steps, device=device).view(time_steps, 1, 1)
+  ```
+- **Thay bằng:**
+  ```python
+  t_norm = (torch.arange(time_steps, device=device, dtype=torch.float32) / time_steps).view(time_steps, 1, 1)
+  ```
+- **Vì sao đây là cách tốt nhất:** khớp chính xác công thức `t/T` của engine JS nên dữ liệu PyTorch và web demo là một.
+- **Kiểm tra:** `t_norm[-1].item() == (time_steps - 1) / time_steps` (= 0.9667 với T = 30).
+
+#### 3.9c JS và PyTorch chuẩn hóa `diff` khác nhau — `src/simulationEngine.ts:26-46`
+- **Vấn đề:** PyTorch dùng `diff = (|u| − V_th) / V_th` (rồi clamp), JS dùng `diff = |u| − V_th` không chia → với V_th ≠ 1 hai bên cho surrogate khác nhau, tức demo web không phản ánh code PyTorch.
+- **Code hiện tại:**
+  ```ts
+  const diff = uMag - threshold;
+  ```
+- **Thay bằng:**
+  ```ts
+  // Relative distance to the circular threshold — identical to the PyTorch VonMisesSurrogate
+  const diff = (uMag - threshold) / Math.max(threshold, 1e-6);
+  ```
+  Thêm ghi chú trong comment hàm: "Changing V_th now rescales the surrogate width proportionally; results for threshold = 1.0 are unchanged."
+- **Vì sao đây là cách tốt nhất:** đồng bộ về phía PyTorch (code "chuẩn" để người dùng mang đi train thật), và chuẩn hóa tương đối làm độ rộng surrogate bất biến theo thang ngưỡng. Lưu ý: gradient mặc định thay đổi nhẹ khi V_th ≠ 1; các benchmark trong PerformanceMonitor (V_th = 1.0) không bị ảnh hưởng.
+- **Kiểm tra:** `computeSurrogateDerivative(1.0, 1.0)` không đổi so với trước; `computeSurrogateDerivative(1.5, 1.5)` = `computeSurrogateDerivative(1.0, 1.0)`.
+
+---
+
+### 3.10 Driver PyVISA write-verify đọc sai — `src/components/NeuromorphicHardwareLab.tsx:144-180` (chuỗi `pythonDriverCode`)
+- **Vấn đề (đã đối chiếu code thật):**
+  1. Đặt `SOUR:VOLT:LEV 1.2` (điện áp GHI) rồi `MEAS:CURR?` không chuyển về điện áp đọc → đo ở 1.2 V (có thể làm nhiễu/ghi đè cell) nhưng lại tính `g_meas = i_read / 0.1`.
+  2. `i_read / 0.1` ra Siemens, trong khi `compile_complex_weights` trả độ dẫn quanh `g_bias = 0.5` (tức mS) → lệch 1000×, vòng lặp không bao giờ hội tụ.
+  3. Xung hiệu chỉnh `1.0 + err * 0.2` luôn dương (SET) → khi đã vượt mục tiêu (err < 0) không thể giảm độ dẫn.
+  4. Điện áp cuối cùng để lại ở mức xung ghi; không có giới hạn an toàn.
+- **Code hiện tại:**
+  ```python
+  def write_verify_pulse(channel: int, target_conductance: float, max_iter: int = 4):
+      """KAIST closed-loop write-verify programming with self-correction"""
+      for step in range(max_iter):
+          smu.write(f"ROUT:CLOS (@{channel})")
+          smu.write("SOUR:VOLT:LEV 1.2; :OUTP ON")
+          time.sleep(10e-6)
+          smu.write("OUTP OFF")
+          i_read = float(smu.query("MEAS:CURR?"))
+          g_meas = i_read / 0.1
+          err = target_conductance - g_meas
+          if abs(err) < 0.05 * target_conductance:
+              break
+          smu.write(f"SOUR:VOLT:LEV {1.0 + err * 0.2}; :OUTP ON")
+          time.sleep(5e-6)
+          smu.write("OUTP OFF")
+  ```
+- **Thay bằng:** (thay toàn bộ hàm `write_verify_pulse`; sửa docstring của `compile_complex_weights` thành `"""Decomposes W into 4 positive differential conductance matrices (units: mS)"""`. Chuỗi nằm trong template literal TS nên KHÔNG dùng backtick, `${` hay dấu `\`.)
+  ```python
+  V_READ = 0.1        # V  - low, non-disturbing read voltage
+  V_SET = 1.0         # V  - base SET (potentiation) pulse amplitude
+  V_RESET = -1.0      # V  - base RESET (depression) pulse amplitude, opposite polarity
+  V_LIMIT = 1.5       # V  - absolute safety limit for any programming pulse
+  PULSE_WIDTH = 10e-6 # s  - nominal; use the SMU pulse mode for real us-level timing
+
+  def read_conductance_mS(channel: int) -> float:
+      """Measure conductance at V_READ so the read does not disturb the cell."""
+      smu.write(f"ROUT:CLOS (@{channel})")
+      smu.write(f"SOUR:VOLT:LEV {V_READ}")
+      smu.write(":OUTP ON")
+      i_read = float(smu.query("MEAS:CURR?"))
+      smu.write("OUTP OFF")
+      return i_read / V_READ * 1e3  # S -> mS
+
+  def apply_pulse(channel: int, volt: float) -> None:
+      """Apply one programming pulse, then always restore the read level."""
+      volt = max(-V_LIMIT, min(V_LIMIT, volt))
+      smu.write(f"ROUT:CLOS (@{channel})")
+      smu.write(f"SOUR:VOLT:LEV {volt:.3f}")
+      smu.write(":OUTP ON")
+      time.sleep(PULSE_WIDTH)
+      smu.write("OUTP OFF")
+      smu.write(f"SOUR:VOLT:LEV {V_READ}")
+
+  def write_verify_pulse(channel: int, target_mS: float, tol: float = 0.05, max_iter: int = 20) -> float:
+      """KAIST-style closed-loop write-verify: SET when below target, RESET when above."""
+      g_meas = read_conductance_mS(channel)
+      for step in range(max_iter):
+          err = target_mS - g_meas
+          if abs(err) <= tol * target_mS:
+              break
+          # Pulse amplitude grows with relative error, capped at V_LIMIT
+          rel = min(1.0, abs(err) / max(target_mS, 1e-9))
+          volt = V_SET + 0.3 * rel if err > 0 else V_RESET - 0.3 * rel
+          apply_pulse(channel, volt)
+          g_meas = read_conductance_mS(channel)
+      return g_meas
+  ```
+- **Vì sao đây là cách tốt nhất:** tách đọc/ghi thành hai hàm, đọc luôn ở điện áp thấp, đúng đơn vị mS khớp `compile_complex_weights`, xung hai cực cho phép hội tụ từ cả hai phía, có giới hạn an toàn và trả về giá trị đo cuối để caller kiểm tra — đúng chuẩn vòng write-verify trong tài liệu memristor/PCM.
+- **Kiểm tra:** đọc lại chuỗi: không còn `1.2`, có `* 1e3`, có nhánh `V_RESET` âm; sau `apply_pulse` luôn có `SOUR:VOLT:LEV {V_READ}`. Trang Hardware hiển thị code và nút Copy chạy (xem 3.11). `npx tsc --noEmit` không lỗi (không có `${` lạc trong template).
+
+---
+
+### 3.11 Nút Copy có thể crash và báo "Copied" sai — `src/components/PytorchTab.tsx:12-16`, `src/components/NeuromorphicHardwareLab.tsx:~183-187`, `src/components/HardwareIntegrationModal.tsx:~119-123`
+- **Vấn đề:** `navigator.clipboard` là `undefined` trên origin http không bảo mật (ví dụ mở bằng IP LAN) → `TypeError` khi bấm. Promise `writeText` không được `await` nên luôn hiện "Copied" kể cả khi bị từ chối quyền. `setTimeout` không được hủy khi unmount.
+- **Code hiện tại (giống nhau ở 3 file):**
+  ```ts
+  const handleCopyCode = () => {
+    navigator.clipboard.writeText(pytorchCodeString);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  ```
+- **Thay bằng:**
+  1) Tạo file mới `src/utils/clipboard.ts`:
+  ```ts
+  // Copies text to the clipboard. Uses the async Clipboard API in secure contexts,
+  // falls back to a hidden <textarea> + execCommand('copy') elsewhere. Resolves true only on success.
+  export async function copyText(text: string): Promise<boolean> {
+    if (typeof navigator !== 'undefined' && navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch {
+        // permission denied / document not focused → try the legacy path
+      }
+    }
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.top = '-9999px';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+  ```
+  2) Trong mỗi component (ví dụ `PytorchTab.tsx`; làm y hệt cho 2 file kia với `pythonDriverCode` / `pythonCode` và tên handler hiện có):
+  ```tsx
+  import { useEffect, useRef, useState } from 'react';
+  import { copyText } from '../utils/clipboard';
+  ...
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+  }, []);
+
+  const handleCopyCode = async () => {
+    const ok = await copyText(pytorchCodeString);
+    if (!ok) {
+      console.warn('Clipboard copy failed');
+      return;
+    }
+    setCopied(true);
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    copiedTimerRef.current = setTimeout(() => setCopied(false), 2000);
+  };
+  ```
+  (`HardwareIntegrationModal.tsx` đang dùng `React.useState` — dùng `React.useRef`/`React.useEffect` cho đồng nhất.)
+- **Vì sao đây là cách tốt nhất:** một helper dùng chung thay vì lặp 3 lần; API hiện đại khi có, fallback cho http/iframe AI Studio; "Copied" chỉ hiện khi thật sự copy được; không setState sau unmount.
+- **Kiểm tra:** mở app qua `http://<IP-LAN>:3000` → bấm Copy không lỗi console, dán ra được nội dung. Bấm Copy liên tục 3 lần → nhãn "Copied" tắt sau 2 s kể từ lần bấm cuối. Chuyển tab ngay sau khi bấm → không có cảnh báo React.
+
+---
+
+### 3.12 Bộ tô màu cú pháp tạo HTML vỡ — `src/components/HardwareIntegrationModal.tsx:274-282` (dùng ở `:261` qua `dangerouslySetInnerHTML`)
+- **Vấn đề:** 6 lần `.replace` nối tiếp trên code CHƯA escape: regex sau khớp vào chính thẻ `<span class="...">` vừa chèn (`"text-gray-500 italic"` bị coi là string, `class` bị coi là keyword, `400`/`500` trong tên class bị coi là số); `'"$&"'` nhân đôi dấu nháy vì `$&` đã gồm dấu nháy. Ví dụ `instrument.write("*RST")` ra `<span <span class="text-pink-<span class="text-orange-400">400</span>...` và `""*RST""`. Code chứa `<`/`>`/`&` cũng chèn HTML thô (rủi ro XSS nếu sau này code lấy từ nguồn ngoài).
+- **Code hiện tại:**
+  ```ts
+  function highlightPython(code: string) {
+    return code
+      .replace(/#.*$/gm, '<span class="text-gray-500 italic">$&</span>')
+      .replace(/"(.*?)"/g, '<span class="text-emerald-400">"$&"</span>')
+      ...
+      .replace(/\b(\d+\.?\d*)\b/g, '<span class="text-orange-400">$&</span>');
+  }
+  ```
+- **Thay bằng:** (thay toàn bộ hàm, giữ nguyên màu cũ)
+  ```ts
+  // Single-pass Python highlighter: tokens are matched once on the RAW source,
+  // every piece of text is HTML-escaped, so inserted <span> tags are never re-matched.
+  const PY_KEYWORDS = new Set([
+    'import', 'from', 'as', 'def', 'class', 'return', 'for', 'while', 'in', 'if', 'elif', 'else',
+    'try', 'except', 'finally', 'with', 'lambda', 'pass', 'break', 'continue', 'raise', 'yield',
+    'and', 'or', 'not', 'is', 'None', 'True', 'False', 'print',
+  ]);
+  const PY_KNOWN_NAMES = new Set([
+    'np', 'pyvisa', 'time', 'controller', 'rm', 'instrument',
+    'G_re_plus', 'G_re_minus', 'G_im_plus', 'G_im_minus', 'target_G',
+  ]);
+
+  const PY_TOKEN_RE =
+    /(#[^\n]*)|("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')|\b([A-Za-z_]\w*)\b|\b(\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b/g;
+
+  function escapeHtml(s: string): string {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function highlightPython(code: string): string {
+    let out = '';
+    let last = 0;
+    for (const m of code.matchAll(PY_TOKEN_RE)) {
+      const start = m.index ?? 0;
+      const [token, comment, str, ident, num] = m;
+      out += escapeHtml(code.slice(last, start));
+      const esc = escapeHtml(token);
+      if (comment) out += `<span class="text-gray-500 italic">${esc}</span>`;
+      else if (str) out += `<span class="text-emerald-400">${esc}</span>`;
+      else if (ident && PY_KEYWORDS.has(ident)) out += `<span class="text-pink-400 font-bold">${esc}</span>`;
+      else if (ident && PY_KNOWN_NAMES.has(ident)) out += `<span class="text-blue-400">${esc}</span>`;
+      else if (num) out += `<span class="text-orange-400">${esc}</span>`;
+      else out += esc;
+      last = start + token.length;
+    }
+    return out + escapeHtml(code.slice(last));
+  }
+  ```
+- **Vì sao đây là cách tốt nhất:** một lần quét trái→phải với regex gộp đảm bảo mỗi ký tự thuộc đúng một token (comment chứa dấu nháy, string chứa `#`, số trong tên biến đều đúng); escape mọi đoạn text nên HTML luôn hợp lệ và an toàn; không cần thêm thư viện (Prism/highlight.js) cho một khối code.
+- **Kiểm tra:** trong Node/console: `highlightPython('instrument.write("*RST")  # reset 400')` → `<span class="text-blue-400">instrument</span>.write(<span class="text-emerald-400">"*RST"</span>)  <span class="text-gray-500 italic"># reset 400</span>` (không có `<span` lồng trong thuộc tính, không `""`). Mở modal → code hiển thị không có ký tự `class="` lạc.
+
+---
+
+### 3.13 Hộp "Harsh Reality" bị lặp — `src/components/HardwareIntegrationModal.tsx:190-206`
+- **Vấn đề:** khối `<div className="bg-[#2A1B1B] ...">` ở dòng 190-206 có tiêu đề "Harsh Reality: Why isn't this technology widespread yet?" nhưng nội dung là bản sao các gạch đầu dòng cho người mới (Code không chạy trong chip, Không có Flashing, Biến là trạng thái vật lý, Định luật Ôm). Khối thật (Variability, Sneak Path, ADC/DAC) ở 208-232 → tiêu đề xuất hiện 2 lần, nội dung lặp với phần ngay phía trên.
+- **Code hiện tại:** khối bắt đầu ở dòng 190 `<div className="bg-[#2A1B1B] border border-rose-500/20 p-5 rounded-xl space-y-4">` chứa `<li>...Code does not run "inside" the chip...</li>` … kết thúc ở `</div>` dòng ~206, ngay trước khối `bg-[#2A1B1B]` thứ hai (dòng 208).
+- **Thay bằng:** xóa nguyên khối dòng 190-206 (từ `<div className="bg-[#2A1B1B]` ĐẦU TIÊN đến `</div>` đóng của nó). Giữ nguyên khối thứ hai (208-232).
+- **Vì sao đây là cách tốt nhất:** nội dung của khối bị xóa đã có đầy đủ ở phần giải thích ngay phía trên; xóa là sửa đúng mà không mất thông tin.
+- **Kiểm tra:** grep `Harsh Reality` trong file → đúng 1 kết quả; modal hiển thị 1 hộp đỏ với 3 mục Variability / Sneak Path / ADC-DAC.
+
+---
+
+### 3.14 Sai số pha không được wrap — `src/components/ChoiLabTab.tsx:267`
+- **Vấn đề:** `atan2` trả về (−180°, 180°]. Gần biên ±180°, lệch thật 1° (ví dụ ideal = 179.5°, hw = −179.5°) hiển thị thành Δθ = 359°.
+- **Code hiện tại:**
+  ```ts
+  const phaseErr = Math.abs(idealPhaseDeg - hwPhaseDeg);
+  ```
+- **Thay bằng:**
+  ```ts
+  // Shortest angular distance on the circle, in [0, 180]
+  const phaseDiff = ((idealPhaseDeg - hwPhaseDeg + 540) % 360) - 180;
+  const phaseErr = Math.abs(phaseDiff);
+  ```
+- **Vì sao đây là cách tốt nhất:** công thức chuẩn cho khoảng cách góc ngắn nhất; `+540` đảm bảo đối số luôn dương với hiệu trong (−360°, 360°) nên `%` của JS không trả số âm.
+- **Kiểm tra:** ideal = 179.5, hw = −179.5 → 1.00°; ideal = 10, hw = −10 → 20.00°; ideal = hw → 0.00°.
+
+---
+
+### 3.15 Dọn code chết và file lỗi thời
+> **Chỉ làm nếu người dùng xác nhận xóa; nếu muốn giữ, áp dụng 3.12–3.14 thay vì xóa.**
+> (Riêng `lint_output.txt` và nhãn header ở 3.15c luôn làm.)
+
+#### 3.15a Xóa 3 component không được import — `src/components/ChoiLabTab.tsx`, `src/components/HardwareBlueprintTab.tsx`, `src/components/HardwareIntegrationModal.tsx`
+- **Vấn đề:** không file nào import 3 component này (`App.tsx` chỉ dùng `NeuromorphicHardwareLab`), nhưng chúng vẫn bị `tsc --noEmit` kiểm tra và phải bảo trì (đã có lỗi ở 3.12–3.14).
+- **Thay bằng:** xóa 3 file. Sau đó chạy grep `ChoiLabTab|HardwareBlueprintTab|HardwareIntegrationModal` trong `src/` → phải 0 kết quả. Xóa luôn key dịch không dùng `"app.tab.choilab"` trong `src/contexts/LanguageContext.tsx:20`.
+- **Vì sao đây là cách tốt nhất:** code không ai gọi chỉ tốn công bảo trì và gây lỗi lint; lịch sử vẫn còn nếu cần khôi phục.
+- **Kiểm tra:** `npm run lint` và `npm run build` thành công; mọi tab trong app vẫn hoạt động.
+
+#### 3.15b State không dùng — `src/components/VisionSNN.tsx:106`
+- **Code hiện tại:**
+  ```ts
+  const [isHardwareModalOpen, setIsHardwareModalOpen] = useState<boolean>(false);
+  ```
+- **Thay bằng:** xóa dòng này (cả hai biến không được đọc/gọi ở đâu).
+- **Kiểm tra:** grep `isHardwareModalOpen` → 0 kết quả; tab Vision chạy bình thường.
+
+#### 3.15c Luôn làm: file lint lỗi thời + nhãn header gây hiểu nhầm
+- Xóa `lint_output.txt` ở thư mục gốc (các lỗi TS1382/TS1109 trong đó đã không còn).
+- `src/App.tsx:352`: nhãn cứng "Hardware Ready" / "Sẵn Sàng" khiến người dùng tưởng có phần cứng thật kết nối.
+  - **Code hiện tại:** `<span>{isEn ? 'Hardware Ready' : 'Sẵn Sàng'}</span>`
+  - **Thay bằng:** `<span>{isEn ? 'Simulation Mode' : 'Chế độ mô phỏng'}</span>`
+  - **Kiểm tra:** header góc phải hiển thị "Chế độ mô phỏng" (vi) / "Simulation Mode" (en).
+
+---
+
+### 3.16 Thống nhất ký hiệu: `V_th` = ngưỡng, `θ` = pha
+- **Vấn đề:** cùng chữ θ đang mang hai nghĩa: TheoryTab và SNNComparison dùng θ cho **ngưỡng**, trong khi SNNComparison (dòng 205, 236), ChoiLabTab (190, 361, 408) và code PyTorch dùng θ cho **pha**/`arg(U)`, còn PyTorch gọi ngưỡng là `V_th`. Người đọc dễ nhầm `|U| ≥ θ` là so sánh với góc.
+- **Code hiện tại → Thay bằng:**
+  - `src/components/TheoryTab.tsx:347`:
+    ```tsx
+    <BlockMath math="|U(t)| \ge \theta \implies U(t) \leftarrow U(t) - \theta \cdot e^{j \arg U(t)}" />
+    ```
+    →
+    ```tsx
+    <BlockMath math="|U(t)| \ge V_{th} \implies U(t) \leftarrow U(t) - V_{th} \cdot e^{j \arg U(t)}" />
+    ```
+  - `src/components/SNNComparison.tsx:~975`: `{selectedArch === 'complex' ? "|U| ≥ θ" : "V ≥ θ"}` → `{selectedArch === 'complex' ? "|U| ≥ V_th" : "V ≥ V_th"}`
+  - `src/components/SNNComparison.tsx` trong `complexNodeDetails.threshold.formula`:
+    `"|U(t)| \\ge \\theta_{thres} \\implies S_{out}(t) = 1, \\ U(t) \\leftarrow 0"` →
+    `"|U(t)| \\ge V_{th} \\implies S_{out}(t) = e^{j \\arg U(t)}, \\ U(t) \\leftarrow U(t) - V_{th} e^{j \\arg U(t)}"`
+    (đồng thời sửa sai lệch nội dung: engine mặc định dùng soft reset giữ pha và spike mang pha, không phải `S = 1, U ← 0`).
+  - `traditionalNodeDetails.threshold.formula`: `"V(t) \\ge \\theta_{thres} \\implies ..."` → `"V(t) \\ge V_{th} \\implies S_{out}(t) = 1, \\ V(t) \\leftarrow V_{reset}"`
+  - `title`/`explanation` của node threshold: đã đổi sang `$V_{th}$` ở mục 3.4.
+  - Giữ nguyên θ ở các chỗ mang nghĩa pha (SNNComparison 205, 236; ChoiLabTab 190, 361, 408).
+- **Vì sao đây là cách tốt nhất:** khớp với ký hiệu trong code PyTorch (`V_th`) và engine (`threshold`), nên lý thuyết, demo và code dùng một ngôn ngữ chung; θ chỉ còn một nghĩa là pha.
+- **Kiểm tra:** grep `\\theta` trong `TheoryTab.tsx` và `SNNComparison.tsx` → chỉ còn ở các công thức mang nghĩa pha (ví dụ `e^{j\\theta_i}` của node inputs); không còn `\\theta_{thres}`.
+
+---
+
+**Sau khi xong Prompt 3:** chạy `npm run lint` (phải 0 lỗi) và `npm run dev`, mở lần lượt các tab Comparison, Network, Neuron, Hardware, PyTorch để kiểm tra theo các mục "Kiểm tra" ở trên. Liệt kê từng mục 3.x đã sửa ở file:dòng nào.

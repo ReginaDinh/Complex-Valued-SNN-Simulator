@@ -23,13 +23,15 @@ export const complex = {
 export type Complex = [number, number];
 export type SurrogateType = 'von_mises' | 'fast_sigmoid' | 'atan';
 
+// Changing V_th now rescales the surrogate width proportionally; results for threshold = 1.0 are unchanged.
 export function computeSurrogateDerivative(
   uMag: number,
   threshold: number,
   type: SurrogateType = 'von_mises',
   sharpness: number = 2.5
 ): number {
-  const diff = uMag - threshold;
+  // Relative distance to the circular threshold — identical to the PyTorch VonMisesSurrogate
+  const diff = (uMag - threshold) / Math.max(threshold, 1e-6);
   if (type === 'fast_sigmoid') {
     const denom = 1.0 + sharpness * Math.abs(diff);
     return 1.0 / (denom * denom);
@@ -59,16 +61,16 @@ export interface SimulationPerfSnapshot {
 }
 
 class SimulationPerformanceTracker {
-  lastComputeMs: number = 0.18;
-  avgComputeMs: number = 0.21;
-  peakComputeMs: number = 0.45;
+  lastComputeMs: number = 0;
+  avgComputeMs: number = 0;
+  peakComputeMs: number = 0;
   totalCalls: number = 0;
   totalMacs: number = 0;
   totalSpikes: number = 0;
-  activeTensorBytes: number = 4096;
-  lastOpLabel: string = 'cLIF.step';
+  activeTensorBytes: number = 0;
+  lastOpLabel: string = '—';
   lastTimestamp: number = performance.now();
-  recentComputeHistory: number[] = [0.18, 0.22, 0.19, 0.24, 0.20, 0.17, 0.21, 0.23, 0.19, 0.20];
+  recentComputeHistory: number[] = [];
 
   private batchStartMs: number = 0;
   private batchAccumMs: number = 0;
@@ -122,7 +124,8 @@ class SimulationPerformanceTracker {
     label: string
   ) {
     this.lastComputeMs = computeMs;
-    this.avgComputeMs = this.avgComputeMs * 0.82 + computeMs * 0.18;
+    this.avgComputeMs =
+      this.totalCalls === 0 ? computeMs : this.avgComputeMs * 0.82 + computeMs * 0.18;
     this.peakComputeMs = Math.max(this.peakComputeMs * 0.995, computeMs);
     this.totalCalls += 1;
     this.totalMacs += macs;
@@ -134,10 +137,16 @@ class SimulationPerformanceTracker {
   }
 
   resetPeak() {
-    this.peakComputeMs = this.lastComputeMs;
+    this.lastComputeMs = 0;
+    this.avgComputeMs = 0;
+    this.peakComputeMs = 0;
     this.totalCalls = 0;
     this.totalMacs = 0;
     this.totalSpikes = 0;
+    this.recentComputeHistory = [];
+    this.batchAccumMs = 0;
+    this.batchMacs = 0;
+    this.batchSpikes = 0;
   }
 
   getSnapshot(): SimulationPerfSnapshot {
@@ -187,6 +196,21 @@ export class ComplexLIFNeuron {
     this.leakIm = this.leakMag * Math.sin(leakPhase);
   }
 
+  // Update parameters in place without touching membrane state
+  setParams(
+    leakMag: number,
+    leakPhase: number,
+    threshold: number,
+    resetMode: 'soft' | 'hard'
+  ) {
+    this.leakMag = Math.max(0, Math.min(0.999, leakMag));
+    this.leakPhase = leakPhase;
+    this.threshold = Math.max(0.05, threshold);
+    this.resetMode = resetMode;
+    this.leakRe = this.leakMag * Math.cos(leakPhase);
+    this.leakIm = this.leakMag * Math.sin(leakPhase);
+  }
+
   reset() {
     this.uRe = 0;
     this.uIm = 0;
@@ -196,7 +220,8 @@ export class ComplexLIFNeuron {
 
   step(
     inputRe: number,
-    inputIm: number
+    inputIm: number,
+    track: boolean = true
   ): {
     spiked: boolean;
     spikeValRe: number;
@@ -204,7 +229,7 @@ export class ComplexLIFNeuron {
     preResetMag: number;
     preResetAngle: number;
   } {
-    const t0 = performance.now();
+    const t0 = track ? performance.now() : 0;
     // u_pre(t) = beta * u(t-1) + input(t), where beta = leakMag * e^{j * leakPhase}
     const nextRe = this.leakRe * this.uRe - this.leakIm * this.uIm + inputRe;
     const nextIm = this.leakRe * this.uIm + this.leakIm * this.uRe + inputIm;
@@ -229,7 +254,7 @@ export class ComplexLIFNeuron {
         this.uRe -= this.threshold * spikeValRe;
         this.uIm -= this.threshold * spikeValIm;
       }
-      perfTracker.recordMicroStep(performance.now() - t0, 4, true);
+      if (track) perfTracker.recordMicroStep(performance.now() - t0, 4, true);
       return {
         spiked: true,
         spikeValRe,
@@ -239,7 +264,7 @@ export class ComplexLIFNeuron {
       };
     }
 
-    perfTracker.recordMicroStep(performance.now() - t0, 4, false);
+    if (track) perfTracker.recordMicroStep(performance.now() - t0, 4, false);
     return {
       spiked: false,
       spikeValRe: 0,
@@ -259,10 +284,10 @@ export interface SignalSample {
 
 /**
  * Generates multi-channel complex spectral signal samples without Nyquist aliasing.
- * Normalized time t_norm = t / timeSteps in [0, 1) so frequencies up to timeSteps/2 Hz
+ * Normalized time t_norm = t / timeSteps in [0, 1) so frequencies up to timeSteps/2 cycles per window
  * are properly resolved without integer-step aliasing.
- * - Class 0: Coherent carrier at freq0 Hz (zero inter-channel phase gradient)
- * - Class 1: Carrier at freq1 Hz with inter-channel spatial phase gradient `phaseShift`
+ * - Class 0: Coherent carrier at freq0 cycles per window (zero inter-channel phase gradient)
+ * - Class 1: Carrier at freq1 cycles per window with inter-channel spatial phase gradient `phaseShift`
  */
 export function generateSpectralSignal(
   targetClass: number,
@@ -271,7 +296,8 @@ export function generateSpectralSignal(
   freq0: number = 1.0,
   freq1: number = 4.5,
   phaseShift: number = Math.PI / 2,
-  noiseLevel: number = 0.15
+  noiseLevel: number = 0.15,
+  rng: () => number = Math.random
 ): SignalSample {
   const sequence: Float32Array[] = [];
   const baseFreq = targetClass === 0 ? freq0 : freq1;
@@ -285,19 +311,19 @@ export function generateSpectralSignal(
       const isSignalChannel = i < Math.floor((inFeatures * 3) / 4); // First 12 channels carry structured signal
 
       if (isSignalChannel) {
-        const cleanMag = 0.85 + (Math.random() - 0.5) * 0.15;
+        const cleanMag = 0.85 + (rng() - 0.5) * 0.15;
         const channelPhaseOffset = i * activePhaseShift;
         const phase = 2 * Math.PI * baseFreq * tNorm + channelPhaseOffset;
 
-        const noiseRe = (Math.random() - 0.5) * 2 * noiseLevel;
-        const noiseIm = (Math.random() - 0.5) * 2 * noiseLevel;
+        const noiseRe = (rng() - 0.5) * 2 * noiseLevel;
+        const noiseIm = (rng() - 0.5) * 2 * noiseLevel;
 
         stepArr[i * 2] = cleanMag * Math.cos(phase) + noiseRe;
         stepArr[i * 2 + 1] = cleanMag * Math.sin(phase) + noiseIm;
       } else {
         // Background clutter channels (uncorrelated random phase noise)
-        const clutterMag = Math.random() * (0.35 + noiseLevel * 0.5);
-        const clutterPhase = Math.random() * 2 * Math.PI;
+        const clutterMag = rng() * (0.35 + noiseLevel * 0.5);
+        const clutterPhase = rng() * 2 * Math.PI;
         stepArr[i * 2] = clutterMag * Math.cos(clutterPhase);
         stepArr[i * 2 + 1] = clutterMag * Math.sin(clutterPhase);
       }
@@ -373,7 +399,7 @@ export class TSComplexSNN {
     this.neurons.forEach(n => n.reset());
   }
 
-  forward(inputSequence: Float32Array[]): ForwardResult {
+  forward(inputSequence: Float32Array[], record: boolean = true): ForwardResult {
     const t0 = performance.now();
     this.reset();
     const timeSteps = inputSequence.length;
@@ -419,7 +445,7 @@ export class TSComplexSNN {
           realMultiplications += multsPerSynapse;
         }
 
-        const stepRes = this.neurons[o].step(sumRe, sumIm);
+        const stepRes = this.neurons[o].step(sumRe, sumIm, false);
         stepSpikes.push(stepRes.spiked);
         if (stepRes.spiked) {
           spikeCounts[o]++;
@@ -458,18 +484,20 @@ export class TSComplexSNN {
       phaseCoherence.push(plv);
     }
 
-    const totalSpikesInPass = spikeCounts.reduce((acc, v) => acc + v, 0);
-    const tensorBytes =
-      (this.outFeatures * this.inFeatures * 2 +
-        timeSteps * (this.inFeatures * 2 + this.outFeatures * 4)) *
-      4;
-    perfTracker.recordSample(
-      Math.max(0.02, performance.now() - t0),
-      realMultiplications,
-      totalSpikesInPass,
-      tensorBytes,
-      this.useKaratsuba ? 'SNN.forward (Karatsuba 3M)' : 'SNN.forward (Standard 4M)'
-    );
+    if (record) {
+      const totalSpikesInPass = spikeCounts.reduce((acc, v) => acc + v, 0);
+      const tensorBytes =
+        (this.outFeatures * this.inFeatures * 2 +
+          timeSteps * (this.inFeatures * 2 + this.outFeatures * 4)) *
+        4;
+      perfTracker.recordSample(
+        Math.max(0.02, performance.now() - t0),
+        realMultiplications,
+        totalSpikesInPass,
+        tensorBytes,
+        this.useKaratsuba ? 'SNN.forward (Karatsuba 3M)' : 'SNN.forward (Standard 4M)'
+      );
+    }
 
     return {
       surrogateRates: Array.from(surrogateRates),
@@ -488,10 +516,10 @@ export class TSComplexSNN {
     predictions: number[];
     firingRates: number[];
     phaseCoherence: number[];
+    forward: ForwardResult;
   } {
-    const { surrogateRates, firingRates, phaseCoherence } = this.forward(
-      sample.inputSpikeSequence
-    );
+    const forward = this.forward(sample.inputSpikeSequence);
+    const { surrogateRates, firingRates, phaseCoherence } = forward;
 
     // Temperature-scaled softmax for crisp class probability estimation
     const temp = 2.5;
@@ -502,10 +530,10 @@ export class TSComplexSNN {
     const probs = exps.map(e => e / (sumExps || 1e-9));
 
     const loss = -Math.log(probs[sample.target] + 1e-15);
-    return { loss, predictions: probs, firingRates, phaseCoherence };
+    return { loss, predictions: probs, firingRates, phaseCoherence, forward };
   }
 
-  trainStep(sample: SignalSample, learningRate: number): number {
+  trainStep(sample: SignalSample, learningRate: number, record: boolean = true): number {
     const t0 = performance.now();
     const timeSteps = sample.inputSpikeSequence.length;
     const {
@@ -514,7 +542,7 @@ export class TSComplexSNN {
       spikeTrains,
       spikeCounts,
       realMultiplications,
-    } = this.forward(sample.inputSpikeSequence);
+    } = this.forward(sample.inputSpikeSequence, false);
 
     const temp = 2.5;
     const scaled = surrogateRates.map(r => r * temp);
@@ -559,7 +587,8 @@ export class TSComplexSNN {
           const mag = Math.sqrt(uRe * uRe + uIm * uIm) || 1e-9;
 
           const surrDeriv = computeSurrogateDerivative(mag, threshold, this.surrogateType, 2.5);
-          const effectiveScale = (1.0 / threshold) * (1.0 + 0.5 * surrDeriv);
+          // ds/d|U| for readout s = |U|/V_th + 0.5 * H(|U| - V_th), with H' ≈ surrogate
+          const effectiveScale = 1.0 / threshold + 0.5 * surrDeriv;
 
           // Wirtinger derivative d|U|/dW_re and d|U|/dW_im:
           // Since U = W * E => U_re = W_re E_re - W_im E_im, U_im = W_re E_im + W_im E_re
@@ -601,19 +630,21 @@ export class TSComplexSNN {
       }
     }
 
-    const totalSpikes = spikeCounts.reduce((acc, v) => acc + v, 0);
-    const bpttMacs = realMultiplications + timeSteps * this.outFeatures * this.inFeatures * 8;
-    const bpttTensorBytes =
-      (this.outFeatures * this.inFeatures * 6 +
-        timeSteps * (this.inFeatures * 2 + this.outFeatures * 6)) *
-      4;
-    perfTracker.recordSample(
-      Math.max(0.05, performance.now() - t0),
-      bpttMacs,
-      totalSpikes,
-      bpttTensorBytes,
-      `BPTT.trainStep (${this.surrogateType})`
-    );
+    if (record) {
+      const totalSpikes = spikeCounts.reduce((acc, v) => acc + v, 0);
+      const bpttMacs = realMultiplications + timeSteps * this.outFeatures * this.inFeatures * 8;
+      const bpttTensorBytes =
+        (this.outFeatures * this.inFeatures * 6 +
+          timeSteps * (this.inFeatures * 2 + this.outFeatures * 6)) *
+        4;
+      perfTracker.recordSample(
+        Math.max(0.05, performance.now() - t0),
+        bpttMacs,
+        totalSpikes,
+        bpttTensorBytes,
+        `BPTT.trainStep (${this.surrogateType})`
+      );
+    }
 
     return loss;
   }

@@ -17,7 +17,7 @@ class VonMisesSurrogate(torch.autograd.Function):
 
         # Unit phasor e^{j * arg(u)} = u / (|u| + eps) avoids atan2 branch cut instability
         unit_phasor = u / (magnitude + 1e-8)
-        ctx.save_for_backward(u, magnitude, unit_phasor)
+        ctx.save_for_backward(u, magnitude, unit_phasor, spikes_fired)
         ctx.threshold = threshold
         ctx.kappa = kappa
 
@@ -26,7 +26,7 @@ class VonMisesSurrogate(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor):
-        u, magnitude, unit_phasor = ctx.saved_tensors
+        u, magnitude, unit_phasor, spikes_fired = ctx.saved_tensors
         threshold = ctx.threshold
         kappa = ctx.kappa
 
@@ -42,7 +42,9 @@ class VonMisesSurrogate(torch.autograd.Function):
         # Wirtinger derivative projection:
         # Radial component scales magnitude transition; tangential component preserves phase gradient
         radial_proj = torch.real(grad_output * torch.conj(unit_phasor))
-        tangential_proj = torch.imag(grad_output * torch.conj(unit_phasor)) / (magnitude + threshold)
+        # Phase (tangential) gradient exists only where a spike was actually emitted:
+        # for silent neurons the forward output is identically 0, so d(output)/d(phase) = 0.
+        tangential_proj = spikes_fired * torch.imag(grad_output * torch.conj(unit_phasor)) / (magnitude + threshold)
 
         grad_u = (surrogate_radial * radial_proj + 1j * tangential_proj * 0.25) * unit_phasor
         return grad_u, None, None
@@ -226,7 +228,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Normalized time axis t_norm in [0, 1) prevents Nyquist integer aliasing
-    t_norm = torch.linspace(0, 1, time_steps, device=device).view(time_steps, 1, 1)
+    t_norm = (torch.arange(time_steps, device=device, dtype=torch.float32) / time_steps).view(time_steps, 1, 1)
     model = ComplexSNN(in_features, hidden_features, out_features).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=5e-3)
     criterion = nn.CrossEntropyLoss()

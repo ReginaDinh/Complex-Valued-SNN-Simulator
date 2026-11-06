@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { complex, Complex, ComplexLIFNeuron, perfTracker } from '../simulationEngine';
+import { mulberry32, hashSeed, seededGaussian } from '../utils/random';
 
 interface VisionSNNProps {
   onNavigateToHardware?: () => void;
@@ -68,15 +69,6 @@ const CLASS_NAMES = ['T', 'L', 'X', 'O'];
 
 type PhaseEncodingMode = 'radial' | 'linear' | 'uniform';
 
-// Deterministic pseudo-random Gaussian generator so sliders don't jitter unpredictably
-function seededGaussian(seed: number): number {
-  const x = Math.sin(seed * 12.9898 + 78.233) * 43758.5453;
-  const u1 = Math.max(1e-7, x - Math.floor(x));
-  const y = Math.sin((seed + 1) * 93.9898 + 12.233) * 28461.8453;
-  const u2 = Math.max(1e-7, y - Math.floor(y));
-  return Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
-}
-
 export default function VisionSNN({ onNavigateToHardware }: VisionSNNProps = {}) {
   const { language } = useLanguage();
   const isEn = language === 'en';
@@ -102,8 +94,7 @@ export default function VisionSNN({ onNavigateToHardware }: VisionSNNProps = {})
   const [enableSelfCorrection, setEnableSelfCorrection] = useState<boolean>(true);
   const [noiseSeed, setNoiseSeed] = useState<number>(1);
 
-  // Modal & simulation results
-  const [isHardwareModalOpen, setIsHardwareModalOpen] = useState<boolean>(false);
+  // Simulation results
   const [simResult, setSimResult] = useState<{
     spikeRates: number[];
     potentials: Complex[][];
@@ -183,8 +174,8 @@ export default function VisionSNN({ onNavigateToHardware }: VisionSNNProps = {})
         // 2. Conductance programming noise relative to full-scale conductance gMax
         if (writeNoise > 0) {
           const effectiveNoise = (enableSelfCorrection ? writeNoise * 0.15 : writeNoise) * gMax;
-          const nRe = seededGaussian(noiseSeed * 1000 + c * 64 + idx);
-          const nIm = seededGaussian(noiseSeed * 2000 + c * 64 + idx);
+          const nRe = seededGaussian(hashSeed(noiseSeed, 1, c, idx));
+          const nIm = seededGaussian(hashSeed(noiseSeed, 2, c, idx));
           wr += nRe * effectiveNoise;
           wi += nIm * effectiveNoise;
         }
@@ -240,7 +231,7 @@ export default function VisionSNN({ onNavigateToHardware }: VisionSNNProps = {})
           }
 
           const jitter =
-            phaseJitter > 0 ? seededGaussian(t * 100 + idx + noiseSeed) * phaseJitter : 0;
+            phaseJitter > 0 ? seededGaussian(hashSeed(noiseSeed, 3, t, idx)) * phaseJitter : 0;
           const finalPhase = spatialPhase * globalPhaseScale + temporalPhase + jitter;
 
           const xRe = amplitude * Math.cos(finalPhase);
@@ -266,7 +257,7 @@ export default function VisionSNN({ onNavigateToHardware }: VisionSNNProps = {})
           phaseSumIm[o] += pixelPhasorIm / activeCount;
         }
 
-        const res = neurons[o].step(sumRe, sumIm);
+        const res = neurons[o].step(sumRe, sumIm, false);
         stepPotentials.push([neurons[o].preResetRe, neurons[o].preResetIm]);
         stepSpikes.push(res.spiked);
         if (res.spiked) spikeCounts[o]++;
@@ -327,19 +318,20 @@ export default function VisionSNN({ onNavigateToHardware }: VisionSNNProps = {})
       for (let idx = 0; idx < 64; idx++) {
         const diffRe = compiledWeights[c][idx][0] - idealWeights[c][idx][0];
         const diffIm = compiledWeights[c][idx][1] - idealWeights[c][idx][1];
-        avgRmsError += Math.sqrt(diffRe * diffRe + diffIm * diffIm) / maxWeightMag;
+        avgRmsError += (diffRe * diffRe + diffIm * diffIm) / (maxWeightMag * maxWeightMag);
       }
     }
-    avgRmsError /= 4 * 64;
+    // RMS of complex weight error, normalized to full-scale conductance
+    avgRmsError = Math.sqrt(avgRmsError / (4 * 64));
 
     for (let c = 0; c < 4; c++) {
       const baseGrid = TEMPLATES[CLASS_NAMES[c]];
       for (let trial = 0; trial < 5; trial++) {
-        const testGrid = baseGrid.map((val, idx) => {
+        // Flip each pixel independently with p = 2/64 (expected 2 flips per noisy trial)
+        const rng = mulberry32(hashSeed(noiseSeed, 4, c, trial));
+        const testGrid = baseGrid.map(val => {
           if (trial === 0) return val;
-          // Flip ~2 pixels per noisy trial
-          const r = Math.abs(Math.sin((c * 100 + trial * 37 + idx + noiseSeed) * 19.19));
-          return r > 0.96 ? (val === 1 ? 0 : 1) : val;
+          return rng() < 2 / 64 ? (val === 1 ? 0 : 1) : val;
         });
         const res = evaluatePattern(testGrid, inputPhaseJitter);
         // Score combines spike rate and mean current magnitude
@@ -380,14 +372,25 @@ export default function VisionSNN({ onNavigateToHardware }: VisionSNNProps = {})
 
   const handlePixelMouseEnter = (idx: number) => {
     if (!isDrawing) return;
-    const newGrid = [...grid];
-    newGrid[idx] = drawValue;
-    setGrid(newGrid);
+    setGrid(prev => {
+      if (prev[idx] === drawValue) return prev;
+      const next = [...prev];
+      next[idx] = drawValue;
+      return next;
+    });
   };
 
-  const handlePixelMouseUp = () => {
-    setIsDrawing(false);
-  };
+  // End drawing on mouseup anywhere in the window, not only inside the component
+  useEffect(() => {
+    if (!isDrawing) return;
+    const stop = () => setIsDrawing(false);
+    window.addEventListener('mouseup', stop);
+    window.addEventListener('blur', stop);
+    return () => {
+      window.removeEventListener('mouseup', stop);
+      window.removeEventListener('blur', stop);
+    };
+  }, [isDrawing]);
 
   const getPixelColorStyle = (idx: number) => {
     if (grid[idx] === 0) return 'bg-[#15202B]/60 border border-elegant-muted/5';
@@ -424,7 +427,7 @@ export default function VisionSNN({ onNavigateToHardware }: VisionSNNProps = {})
   }, [simResult]);
 
   return (
-    <div className="space-y-6" onMouseUp={handlePixelMouseUp}>
+    <div className="space-y-6">
 
       {/* Title block */}
       <div className="bg-gradient-to-r from-elegant-card to-elegant-card/40 border border-elegant-muted/15 p-5 rounded-xl shadow-xl space-y-2">

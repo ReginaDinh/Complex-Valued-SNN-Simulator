@@ -1,0 +1,687 @@
+## PROMPT 1 — Lỗi logic mô phỏng & React
+
+> Quy ước chung cho Gemini: chỉ sửa đúng các chỗ dưới đây, giữ nguyên style code xung quanh, không đổi giao diện/màu, giữ song ngữ vi/en. Các API mới (`step(..., track)`, `setParams`, `forward(..., record)`, `evaluateLoss().forward`, `src/utils/random.ts`) được dùng lại ở Prompt 2 và 3, nên phải đặt tên **đúng y như dưới**.
+
+---
+
+### 1.1 perfTracker đếm MACs/spikes hai lần — `src/simulationEngine.ts:197-250, 376-484, 508-517`
+
+- **Vấn đề:** `ComplexLIFNeuron.step()` luôn gọi `performance.now()` 2 lần và `perfTracker.recordMicroStep()`. Khi `TSComplexSNN.forward()` gọi `step()` cho 2 neuron × 30 bước, mỗi step lại cộng MACs/spikes vào tracker và thỉnh thoảng sinh mẫu giả `'cLIF.step (Stream)'`; cuối `forward()` lại `recordSample(realMultiplications, totalSpikesInPass)` → tổng MACs/spikes bị cộng trùng. `trainStep()` gọi `forward()` (ghi 1 mẫu) rồi tự ghi thêm 1 mẫu nữa có `realMultiplications` → trùng lần nữa.
+- **Code hiện tại:**
+  ```ts
+  step(
+    inputRe: number,
+    inputIm: number
+  ): {
+  ...
+    const t0 = performance.now();
+  ...
+      perfTracker.recordMicroStep(performance.now() - t0, 4, true);
+  ...
+    perfTracker.recordMicroStep(performance.now() - t0, 4, false);
+  ```
+  ```ts
+  forward(inputSequence: Float32Array[]): ForwardResult {
+  ...
+        const stepRes = this.neurons[o].step(sumRe, sumIm);
+  ...
+    perfTracker.recordSample(
+      Math.max(0.02, performance.now() - t0),
+  ```
+  ```ts
+    } = this.forward(sample.inputSpikeSequence);   // trong trainStep
+  ```
+- **Thay bằng:**
+
+  (a) `ComplexLIFNeuron.step` — thêm tham số `track`:
+  ```ts
+  step(
+    inputRe: number,
+    inputIm: number,
+    track: boolean = true
+  ): {
+    spiked: boolean;
+    spikeValRe: number;
+    spikeValIm: number;
+    preResetMag: number;
+    preResetAngle: number;
+  } {
+    const t0 = track ? performance.now() : 0;
+    // u_pre(t) = beta * u(t-1) + input(t), where beta = leakMag * e^{j * leakPhase}
+    const nextRe = this.leakRe * this.uRe - this.leakIm * this.uIm + inputRe;
+    const nextIm = this.leakRe * this.uIm + this.leakIm * this.uRe + inputIm;
+
+    this.preResetRe = nextRe;
+    this.preResetIm = nextIm;
+    this.uRe = nextRe;
+    this.uIm = nextIm;
+
+    const mag = Math.sqrt(nextRe * nextRe + nextIm * nextIm);
+    const angle = Math.atan2(nextIm, nextRe);
+
+    if (mag >= this.threshold) {
+      const spikeValRe = Math.cos(angle);
+      const spikeValIm = Math.sin(angle);
+
+      if (this.resetMode === 'hard') {
+        this.uRe = 0;
+        this.uIm = 0;
+      } else {
+        // Soft reset: subtract V_th in the exact phase direction e^{j * angle}
+        this.uRe -= this.threshold * spikeValRe;
+        this.uIm -= this.threshold * spikeValIm;
+      }
+      if (track) perfTracker.recordMicroStep(performance.now() - t0, 4, true);
+      return {
+        spiked: true,
+        spikeValRe,
+        spikeValIm,
+        preResetMag: mag,
+        preResetAngle: angle,
+      };
+    }
+
+    if (track) perfTracker.recordMicroStep(performance.now() - t0, 4, false);
+    return {
+      spiked: false,
+      spikeValRe: 0,
+      spikeValIm: 0,
+      preResetMag: mag,
+      preResetAngle: angle,
+    };
+  }
+  ```
+
+  (b) `TSComplexSNN.forward` — thêm `record`, gọi `step(..., false)`, chỉ ghi 1 mẫu khi `record`:
+  ```ts
+  forward(inputSequence: Float32Array[], record: boolean = true): ForwardResult {
+  ```
+  ```ts
+        const stepRes = this.neurons[o].step(sumRe, sumIm, false);
+  ```
+  ```ts
+    if (record) {
+      const totalSpikesInPass = spikeCounts.reduce((acc, v) => acc + v, 0);
+      const tensorBytes =
+        (this.outFeatures * this.inFeatures * 2 +
+          timeSteps * (this.inFeatures * 2 + this.outFeatures * 4)) *
+        4;
+      perfTracker.recordSample(
+        Math.max(0.02, performance.now() - t0),
+        realMultiplications,
+        totalSpikesInPass,
+        tensorBytes,
+        this.useKaratsuba ? 'SNN.forward (Karatsuba 3M)' : 'SNN.forward (Standard 4M)'
+      );
+    }
+  ```
+
+  (c) Trong `trainStep`, thay dòng gọi forward (mẫu duy nhất của trainStep vẫn là `recordSample(... bpttMacs ...)` ở cuối hàm, giữ nguyên):
+  ```ts
+    } = this.forward(sample.inputSpikeSequence, false);
+  ```
+
+  (d) `src/components/VisionSNN.tsx:269` — `evaluatePattern` đã tự `recordSample` ở effect (dòng ~302), nên tắt micro-tracking:
+  ```ts
+        const res = neurons[o].step(sumRe, sumIm, false);
+  ```
+  Giữ nguyên `NeuronTab.tsx:165` (`neuronRef.current.step(inRe, inIm)`) vì đó là luồng "Stream" thật. `NeuronTab.tsx:75` xử lý ở 1.7. Các lời gọi trong `PerformanceMonitor.tsx` xử lý ở Prompt 2.
+- **Vì sao đây là cách tốt nhất:** Mỗi phép toán cấp cao ghi đúng 1 mẫu, không phải đoán "đang ở trong op nào" như cơ chế `beginOp/endOp` (cơ chế đó không ai gọi và vẫn cộng `batchMacs`). Bỏ `performance.now()` trong vòng lặp trong cùng còn giúp forward nhanh hơn đáng kể.
+- **Kiểm tra:** Trong console: `const n = new TSComplexSNN(16,2); const s = generateSpectralSignal(0,30,16); perfTracker.resetPeak(); n.forward(s.inputSpikeSequence); perfTracker.getSnapshot()` → `totalCalls === 1` và `totalMacs === 30*16*2*3 = 2880`. Gọi `n.trainStep(s, 0.02)` sau `resetPeak()` → `totalCalls === 1`.
+
+---
+
+### 1.2 Đạo hàm readout sai hệ số — `src/simulationEngine.ts:562`
+
+- **Vấn đề:** Readout là `s = mean_t(|U_pre|/θ + 0.5·spike)`, nên `∂s/∂|U| = 1/θ + 0.5·σ'(|U|)`. Code nhân thêm `1/θ` vào cả số hạng surrogate. Với θ = 1 thì trùng, nhưng θ = 2 thì gradient surrogate bị giảm 2 lần, θ = 0.5 thì bị tăng 2 lần.
+- **Code hiện tại:**
+  ```ts
+          const effectiveScale = (1.0 / threshold) * (1.0 + 0.5 * surrDeriv);
+  ```
+- **Thay bằng:**
+  ```ts
+          // ds/d|U| for readout s = |U|/V_th + 0.5 * H(|U| - V_th), with H' ≈ surrogate
+          const effectiveScale = 1.0 / threshold + 0.5 * surrDeriv;
+  ```
+- **Vì sao đây là cách tốt nhất:** Đây đúng là đạo hàm của hàm readout mà `forward()` đang tính (dòng 437-438). Sửa readout cho khớp gradient cũ sẽ làm thay đổi hành vi forward, nên không chọn cách đó.
+- **Kiểm tra:** Đặt Threshold = 1.0 → loss/accuracy giống hệt trước khi sửa. Đặt Threshold = 2.0 → mạng vẫn hội tụ, loss giảm đều.
+
+---
+
+### 1.3 Telemetry khởi tạo bằng số bịa, `resetPeak` không reset hết — `src/simulationEngine.ts:61-141`
+
+- **Vấn đề:** Tracker khởi tạo `lastComputeMs = 0.18`, `avgComputeMs = 0.21`, `peakComputeMs = 0.45`, `activeTensorBytes = 4096` và có sẵn 10 điểm lịch sử giả. Vì vậy ngay lúc mở app, UI đã hiển thị như thể có số đo thật. `resetPeak()` không reset `avg`/`last`/history. Ngoài ra EMA bắt đầu từ giá trị giả nên các mẫu đầu bị kéo lệch.
+- **Code hiện tại:**
+  ```ts
+    lastComputeMs: number = 0.18;
+    avgComputeMs: number = 0.21;
+    peakComputeMs: number = 0.45;
+  ...
+    activeTensorBytes: number = 4096;
+  ...
+    recentComputeHistory: number[] = [0.18, 0.22, 0.19, 0.24, 0.20, 0.17, 0.21, 0.23, 0.19, 0.20];
+  ```
+- **Thay bằng:**
+  ```ts
+    lastComputeMs: number = 0;
+    avgComputeMs: number = 0;
+    peakComputeMs: number = 0;
+    totalCalls: number = 0;
+    totalMacs: number = 0;
+    totalSpikes: number = 0;
+    activeTensorBytes: number = 0;
+    lastOpLabel: string = '—';
+    lastTimestamp: number = performance.now();
+    recentComputeHistory: number[] = [];
+  ```
+  Trong `recordSample`, khởi tạo EMA bằng mẫu đầu tiên:
+  ```ts
+      this.lastComputeMs = computeMs;
+      this.avgComputeMs =
+        this.totalCalls === 0 ? computeMs : this.avgComputeMs * 0.82 + computeMs * 0.18;
+      this.peakComputeMs = Math.max(this.peakComputeMs * 0.995, computeMs);
+  ```
+  `resetPeak` reset toàn bộ:
+  ```ts
+    resetPeak() {
+      this.lastComputeMs = 0;
+      this.avgComputeMs = 0;
+      this.peakComputeMs = 0;
+      this.totalCalls = 0;
+      this.totalMacs = 0;
+      this.totalSpikes = 0;
+      this.recentComputeHistory = [];
+      this.batchAccumMs = 0;
+      this.batchMacs = 0;
+      this.batchSpikes = 0;
+    }
+  ```
+- **Vì sao đây là cách tốt nhất:** Số liệu hiển thị chỉ đến từ phép đo thật. Seed EMA bằng mẫu đầu là cách chuẩn để tránh bias về 0 mà không cần hiệu chỉnh kiểu Adam. Các chỗ hiển thị trong `PerformanceMonitor.tsx` (dòng 851-931) đã chịu được mảng rỗng và giá trị 0 (`Math.max(1.0, peak)`).
+- **Kiểm tra:** Tải lại trang khi chưa thao tác gì → `perfTracker.getSnapshot().recentComputeHistory.length` chỉ gồm các mẫu thật (không có 10 giá trị 0.18…0.20 cứng). Bấm reset telemetry → Avg/Last/Peak = 0.00.
+
+---
+
+### 1.4 Stale closure làm mất "góc spike cuối" — `src/components/NeuronTab.tsx:170-176`
+
+- **Vấn đề:** Callback `tick` của rAF bắt `liveStats` tại thời điểm effect chạy (deps không có `liveStats`). Ở mọi bước không bắn xung, `lastSpikeAngleDeg` bị ghi đè bằng giá trị cũ, thường là 0. Kết quả là ô "∠SPIKE" chỉ nháy lên rồi tụt về 0°.
+- **Code hiện tại:**
+  ```ts
+            setLiveStats({
+              spikeCount: totalSpikesRef.current,
+              lastSpikeAngleDeg: stepRes.spiked
+                ? (stepRes.preResetAngle * 180) / Math.PI
+                : liveStats.lastSpikeAngleDeg,
+              instantMag: stepRes.preResetMag,
+            });
+  ```
+- **Thay bằng:**
+  ```ts
+            setLiveStats(prev => ({
+              spikeCount: totalSpikesRef.current,
+              lastSpikeAngleDeg: stepRes.spiked
+                ? (stepRes.preResetAngle * 180) / Math.PI
+                : prev.lastSpikeAngleDeg,
+              instantMag: stepRes.preResetMag,
+            }));
+  ```
+- **Vì sao đây là cách tốt nhất:** Functional updater luôn nhận state mới nhất mà không cần thêm `liveStats` vào deps. Thêm vào deps sẽ khởi động lại vòng rAF mỗi 100 ms.
+- **Kiểm tra:** Input AC, Amplitude 0.6 → sau khi có spike, "∠SPIKE" giữ nguyên góc của spike gần nhất cho tới spike kế tiếp, không về 0°.
+
+---
+
+### 1.5 Đường ±Vth dùng `threshold` cũ — `src/components/NeuronTab.tsx:250-265` (deps ở dòng 322)
+
+- **Vấn đề:** `tick` dùng `threshold` từ closure, trong khi deps là `[isPlaying, inputAmp, inputFreq, inputPhase, inputType]`. Kéo slider Threshold thì vòng tròn ngưỡng (canvas nền) đổi, nhưng đường ±Vth và nhãn trên biểu đồ thời gian vẫn giữ giá trị cũ.
+- **Code hiện tại:**
+  ```ts
+              const threshY_top = h / 2 - threshold * (h * 0.35);
+  ```
+- **Thay bằng:** Đọc ngưỡng từ chính neuron đang chạy. Sau khi sửa 1.6, `neuronRef.current` luôn có ngưỡng mới nhất, nên ở đầu khối vẽ time-series (ngay sau `const h = tCanvas.height;`) thêm:
+  ```ts
+              const th = neuronRef.current.threshold;
+  ```
+  rồi thay mọi `threshold` trong khối vẽ time-series bằng `th` (đã gộp vào code của 1.8). **Không** thêm `threshold` vào deps.
+- **Vì sao đây là cách tốt nhất:** Lấy dữ liệu từ một nguồn duy nhất (neuron đang mô phỏng), nên nhãn luôn khớp đúng ngưỡng neuron đang dùng. Thêm vào deps sẽ hủy/khởi động lại rAF và reset `lastTime` mỗi lần kéo slider.
+- **Kiểm tra:** Đang Play, kéo Threshold từ 1.2 lên 1.8 → nhãn `+Vth (1.8)` cập nhật ngay trong ≤ 100 ms.
+
+---
+
+### 1.6 Kéo slider tạo neuron mới, quỹ đạo nhảy về 0 — `src/components/NeuronTab.tsx:88-90` + `src/simulationEngine.ts`
+
+- **Vấn đề:** Mỗi thay đổi leakMag/leakPhase/threshold/resetMode tạo `new ComplexLIFNeuron(...)`, làm U = 0. Trong khi đó `historyRef`, `simTimeRef`, `totalSpikesRef` vẫn giữ nguyên, nên quỹ đạo có một đoạn thẳng về gốc ở mỗi bước slider, và số spike trộn lẫn giữa nhiều bộ tham số.
+- **Code hiện tại:**
+  ```ts
+    useEffect(() => {
+      neuronRef.current = new ComplexLIFNeuron(leakMag, leakPhase, threshold, resetMode);
+    }, [leakMag, leakPhase, threshold, resetMode]);
+  ```
+- **Thay bằng:**
+
+  (a) Thêm method vào `ComplexLIFNeuron` (`src/simulationEngine.ts`, ngay sau `constructor`):
+  ```ts
+    // Update parameters in place without touching membrane state
+    setParams(
+      leakMag: number,
+      leakPhase: number,
+      threshold: number,
+      resetMode: 'soft' | 'hard'
+    ) {
+      this.leakMag = Math.max(0, Math.min(0.999, leakMag));
+      this.leakPhase = leakPhase;
+      this.threshold = Math.max(0.05, threshold);
+      this.resetMode = resetMode;
+      this.leakRe = this.leakMag * Math.cos(leakPhase);
+      this.leakIm = this.leakMag * Math.sin(leakPhase);
+    }
+  ```
+  (b) `NeuronTab.tsx`:
+  ```ts
+    // Initialize neuron once, then update parameters in place so the trajectory stays continuous
+    useEffect(() => {
+      if (neuronRef.current) {
+        neuronRef.current.setParams(leakMag, leakPhase, threshold, resetMode);
+      } else {
+        neuronRef.current = new ComplexLIFNeuron(leakMag, leakPhase, threshold, resetMode);
+      }
+    }, [leakMag, leakPhase, threshold, resetMode]);
+  ```
+- **Vì sao đây là cách tốt nhất:** Giống hành vi của một mạch thật khi vặn núm: trạng thái giữ nguyên, chỉ động học thay đổi. Gọi `handleReset()` ở mỗi lần đổi tham số cũng nhất quán, nhưng sẽ xóa sạch quỹ đạo mỗi lần kéo slider, mất khả năng quan sát quá trình chuyển tiếp. Người dùng vẫn có nút Reset riêng.
+- **Kiểm tra:** Đang Play, kéo Leak Phase → đường xoắn ốc đổi độ cong liên tục, không có đoạn thẳng về tâm (0,0).
+
+---
+
+### 1.7 Quét cộng hưởng làm bẩn perfTracker — `src/components/NeuronTab.tsx:70-76`
+
+- **Vấn đề:** `resonanceCurve` chạy 25 × 50 = 1250 lần `step()` mỗi khi đổi tham số, và mỗi lần đều ghi vào perfTracker. Khi kéo slider, telemetry nhận hàng nghìn mẫu "cLIF.step (Stream)" không phải từ mô phỏng đang chạy.
+- **Code hiện tại:**
+  ```ts
+          if (testNeuron.step(inRe, inIm).spiked) spks++;
+  ```
+- **Thay bằng:**
+  ```ts
+          if (testNeuron.step(inRe, inIm, false).spiked) spks++;
+  ```
+- **Vì sao đây là cách tốt nhất:** Đây là phép tính phân tích (analysis), không phải luồng mô phỏng. Dùng chung cờ `track` của 1.1, không cần thêm cơ chế mới.
+- **Kiểm tra:** Dừng Play, kéo slider Leak Mag qua lại → `perfTracker.getSnapshot().totalCalls` không tăng.
+- **Ghi chú:** Phép quét luôn dùng input AC, bất kể `inputType` đang chọn. Điều đó đúng về mặt Bode, nhưng tiêu đề biểu đồ nên ghi rõ "AC sweep" (xem Prompt 3).
+
+---
+
+### 1.8 Đường ±Vth và trace vẽ ra ngoài canvas — `src/components/NeuronTab.tsx:250-295`
+
+- **Vấn đề:** Tỷ lệ cố định `h * 0.35` cho mỗi đơn vị. Với h = 400 và threshold = 2.0 (max slider), `threshY_top = 200 - 280 = -80`: đường nằm ngoài canvas khi threshold > ~1.43. Input "pulse" (biên độ tới 1.2 × 2.5 = 3.0) cũng đẩy trace ra ngoài.
+- **Code hiện tại:**
+  ```ts
+              const threshY_top = h / 2 - threshold * (h * 0.35);
+              const threshY_bot = h / 2 + threshold * (h * 0.35);
+  ...
+              tCtx.fillText(`+Vth (${threshold.toFixed(1)})`, 5, threshY_top - 4);
+              tCtx.fillText(`-Vth (-${threshold.toFixed(1)})`, 5, threshY_bot + 10);
+
+              const pts = historyRef.current;
+  ...
+                  const y = h / 2 - valRe * (h * 0.35);
+  ...
+                  const y = h / 2 - valIm * (h * 0.35);
+  ```
+- **Thay bằng:** Thay đoạn từ `const threshY_top = ...` đến `const pts = historyRef.current;` bằng:
+  ```ts
+              const th = neuronRef.current.threshold;
+              const pts = historyRef.current;
+
+              // Auto-fit vertical scale so both ±V_th and the full trace stay on-canvas
+              let peak = th;
+              for (let i = 0; i < pts.length; i++) {
+                const re = pts[i].spiked ? pts[i].preRe : pts[i].uRe;
+                const im = pts[i].spiked ? pts[i].preIm : pts[i].uIm;
+                peak = Math.max(peak, Math.abs(re), Math.abs(im));
+              }
+              const ySc = (h / 2 - 12) / (peak * 1.1);
+
+              const threshY_top = h / 2 - th * ySc;
+              const threshY_bot = h / 2 + th * ySc;
+              tCtx.strokeStyle = 'rgba(248, 113, 113, 0.4)';
+              tCtx.setLineDash([4, 4]);
+              tCtx.beginPath();
+              tCtx.moveTo(0, threshY_top);
+              tCtx.lineTo(w, threshY_top);
+              tCtx.moveTo(0, threshY_bot);
+              tCtx.lineTo(w, threshY_bot);
+              tCtx.stroke();
+              tCtx.setLineDash([]);
+
+              tCtx.fillStyle = '#F87171';
+              tCtx.font = '9px monospace';
+              tCtx.fillText(`+Vth (${th.toFixed(2)})`, 5, threshY_top - 4);
+              tCtx.fillText(`-Vth (-${th.toFixed(2)})`, 5, threshY_bot + 10);
+  ```
+  Và trong hai vòng vẽ Re/Im, thay `(h * 0.35)` bằng `ySc`:
+  ```ts
+                  const y = h / 2 - valRe * ySc;
+  ```
+  ```ts
+                  const y = h / 2 - valIm * ySc;
+  ```
+  (Xóa dòng `const pts = historyRef.current;` cũ vì đã khai báo ở trên.)
+- **Vì sao đây là cách tốt nhất:** Thang tự co giãn theo `max(V_th, |giá trị lớn nhất trong cửa sổ 60 bước|)`, nên mọi tổ hợp slider và kiểu input đều nằm gọn trong canvas, kể cả pulse. Một hệ số cố định như `h*0.45/max(th*1.2,1)` vẫn bị tràn với pulse. Lề 12 px chừa chỗ cho nhãn.
+- **Kiểm tra:** Threshold = 2.0, Input = Pulse, Amplitude = 1.2 → cả hai đường ±Vth, nhãn và trace đều nằm trong khung.
+
+---
+
+### 1.9 Nút "Detune" có thể rơi đúng vào tần số cộng hưởng — `src/components/NeuronTab.tsx:519-522`
+
+- **Vấn đề:** `resonantFreq` nằm trong [0.01, 0.25] (dòng 47-51), slider Leak Phase lên tới 1.57 (f₀ ≈ 0.2499). Khi f₀ > 0.13, `Math.min(0.25, f₀ + 0.12)` bị kẹp về 0.25 ≈ f₀, tức là nút "Lệch pha" lại đặt đúng vào điểm cộng hưởng.
+- **Code hiện tại:**
+  ```ts
+                    onClick={() =>
+                      setInputFreq(Number(Math.min(0.25, resonantFreq + 0.12).toFixed(3)))
+                    }
+  ```
+- **Thay bằng:**
+  ```ts
+                    onClick={() => {
+                      // Move ~0.12 cycles/step away from resonance, staying inside slider range [0.01, 0.25]
+                      const detuned =
+                        resonantFreq + 0.12 <= 0.25 ? resonantFreq + 0.12 : resonantFreq - 0.12;
+                      setInputFreq(Number(Math.max(0.01, detuned).toFixed(3)));
+                    }}
+  ```
+- **Vì sao đây là cách tốt nhất:** Vì 0.25 − 0.01 = 0.24 ≥ 2 × 0.12, với mọi f₀ trong [0.01, 0.25] luôn có ít nhất một hướng cách f₀ đúng 0.12 mà vẫn nằm trong dải slider. Khoảng lệch được đảm bảo không đổi.
+- **Kiểm tra:** Leak Phase = 1.57 → bấm Detune → Frequency ≈ 0.130 (không phải 0.250). Leak Phase = 0.3 (f₀ ≈ 0.048) → Detune → 0.168.
+
+---
+
+### 1.10 Chạy forward hai lần cho cùng một mẫu — `src/simulationEngine.ts:486-506` + `src/components/NetworkTab.tsx:101-104, 179-198, 321-325`
+
+- **Vấn đề:** `net.forward(sample)` rồi `net.evaluateLoss(sample)` (bên trong lại gọi `forward`), nên mỗi lần hiển thị tốn 2× tính toán và ghi 2 mẫu perf. Trong vòng train, điều này xảy ra mỗi 140 ms.
+- **Code hiện tại:**
+  ```ts
+      const outs = net.forward(sample.inputSpikeSequence);
+      const evalRes = net.evaluateLoss(sample);
+      setSampleOutputs(outs);
+      setSampleProbs(evalRes.predictions);
+  ```
+  ```ts
+        const currentForward = network.forward(displaySample.inputSpikeSequence);
+        const currentEval = network.evaluateLoss(displaySample);
+  ...
+        setSampleOutputs(currentForward);
+  ```
+  ```ts
+      const outs = network.forward(sample.inputSpikeSequence);
+      const evalRes = network.evaluateLoss(sample);
+      setCurrentSample(sample);
+      setSampleOutputs(outs);
+  ```
+- **Thay bằng:**
+
+  (a) `evaluateLoss` trả kèm kết quả forward (`src/simulationEngine.ts`):
+  ```ts
+    evaluateLoss(sample: SignalSample): {
+      loss: number;
+      predictions: number[];
+      firingRates: number[];
+      phaseCoherence: number[];
+      forward: ForwardResult;
+    } {
+      const forward = this.forward(sample.inputSpikeSequence);
+      const { surrogateRates, firingRates, phaseCoherence } = forward;
+
+      // Temperature-scaled softmax for crisp class probability estimation
+      const temp = 2.5;
+      const scaled = surrogateRates.map(r => r * temp);
+      const maxRate = Math.max(...scaled);
+      const exps = scaled.map(r => Math.exp(r - maxRate));
+      const sumExps = exps.reduce((a, b) => a + b, 0);
+      const probs = exps.map(e => e / (sumExps || 1e-9));
+
+      const loss = -Math.log(probs[sample.target] + 1e-15);
+      return { loss, predictions: probs, firingRates, phaseCoherence, forward };
+    }
+  ```
+  (b) `NetworkTab.tsx` — `handleResetNetwork`:
+  ```ts
+      const evalRes = net.evaluateLoss(sample);
+      setSampleOutputs(evalRes.forward);
+      setSampleProbs(evalRes.predictions);
+  ```
+  Vòng train (xóa dòng `const currentForward = ...`):
+  ```ts
+        const currentEval = network.evaluateLoss(displaySample);
+  ...
+        setSampleOutputs(currentEval.forward);
+        setSampleProbs(currentEval.predictions);
+  ```
+  `handleInjectTestSample`:
+  ```ts
+      const evalRes = network.evaluateLoss(sample);
+      setCurrentSample(sample);
+      setSampleOutputs(evalRes.forward);
+      setSampleProbs(evalRes.predictions);
+  ```
+- **Vì sao đây là cách tốt nhất:** Một lần forward cung cấp đủ cả output lẫn xác suất, nên 2 kết quả luôn nhất quán (cùng một lần chạy). Tách hàm softmax riêng cũng được, nhưng sẽ phải nhân bản logic temperature ở component.
+- **Kiểm tra:** `grep -n "\.forward(" src/components/NetworkTab.tsx` → không còn kết quả. Bấm "Inject Class 0/1" → xác suất và biểu đồ membrane hiển thị bình thường.
+
+---
+
+### 1.11 Làm tròn trong state EMA khiến accuracy kẹt ở 99% — `src/components/NetworkTab.tsx:195`
+
+- **Vấn đề:** State lưu giá trị đã `toFixed(2)`. Với acc = 1.0 liên tục: 0.99·0.7 + 0.3 = 0.993 → làm tròn về 0.99 → mãi mãi 99%. Sai số làm tròn tích lũy làm EMA bị lệch.
+- **Code hiện tại:**
+  ```ts
+        setTrainAccuracy(prevAcc => parseFloat((prevAcc * 0.7 + acc * 0.3).toFixed(2)));
+  ```
+- **Thay bằng:**
+  ```ts
+        setTrainAccuracy(prevAcc => prevAcc * 0.7 + acc * 0.3);
+  ```
+  (Hiển thị ở dòng 582 đã có `(trainAccuracy * 100).toFixed(0)`, giữ nguyên.)
+- **Vì sao đây là cách tốt nhất:** Chỉ làm tròn ở tầng hiển thị là nguyên tắc chuẩn. State giữ độ chính xác đầy đủ.
+- **Kiểm tra:** Train với cấu hình mặc định tới khi val acc = 100% liên tục → ô accuracy đạt 100% sau vài chục epoch.
+
+---
+
+### 1.12 Effect đổi Karatsuba/surrogate không cập nhật xác suất — `src/components/NetworkTab.tsx:120-128`
+
+- **Vấn đề (đã hiệu chỉnh so với báo cáo ban đầu):** Không có stale closure thật, vì effect chạy lại đúng lúc toggle và đọc `network`/`currentSample` của render hiện tại. Vấn đề thật là effect chỉ `setSampleOutputs`, không `setSampleProbs`, và gọi `forward()` riêng. Hiện vô hại vì Karatsuba tương đương toán học và surrogate chỉ ảnh hưởng backward, nhưng không nhất quán với 1.10.
+- **Code hiện tại:**
+  ```ts
+        if (currentSample) {
+          setSampleOutputs(network.forward(currentSample.inputSpikeSequence));
+        }
+  ```
+- **Thay bằng:**
+  ```ts
+        if (currentSample) {
+          const evalRes = network.evaluateLoss(currentSample);
+          setSampleOutputs(evalRes.forward);
+          setSampleProbs(evalRes.predictions);
+        }
+  ```
+  Giữ deps `[useKaratsuba, surrogateType]`. **Không** thêm `currentSample` vào deps, vì nó đổi mỗi tick train và sẽ gây forward thừa mỗi 140 ms.
+- **Vì sao đây là cách tốt nhất:** Đồng bộ output và xác suất với cùng một lần chạy, không thêm vòng render thừa.
+- **Kiểm tra:** Bật/tắt Karatsuba → xác suất hiển thị không đổi (đúng, vì tương đương toán học) và không có lỗi console.
+
+---
+
+### 1.13 Nhiễu benchmark VisionSNN: lật ~12 pixel thay vì ~2, và "Resample" chỉ dịch mẫu 1 pixel — `src/components/VisionSNN.tsx:72-78, 186-187, 243, 341-342` + file mới `src/utils/random.ts`
+
+- **Vấn đề:**
+  - `Math.abs(Math.sin(...)) > 0.96` đúng khoảng 18% thời gian, tức ≈ 11.8/64 pixel bị lật mỗi trial, không phải "~2" như comment. Accuracy 20-trial vì vậy được đo dưới nhiễu nặng gấp ~6 lần so với mô tả.
+  - Seed `c*100 + trial*37 + idx + noiseSeed` và `t*100 + idx + noiseSeed` chỉ cộng `noiseSeed`, nên tăng seed 1 đơn vị chỉ dịch mẫu nhiễu đi 1 pixel (63/63 vị trí trùng). Nút "Resample Chip Noise" gần như vô tác dụng với phép lật pixel và jitter pha.
+  - Hàm `seededGaussian` dựa trên hash `sin(x)·43758` có chất lượng thống kê kém.
+- **Code hiện tại:**
+  ```ts
+  function seededGaussian(seed: number): number {
+    const x = Math.sin(seed * 12.9898 + 78.233) * 43758.5453;
+  ...
+  }
+  ```
+  ```ts
+            const nRe = seededGaussian(noiseSeed * 1000 + c * 64 + idx);
+            const nIm = seededGaussian(noiseSeed * 2000 + c * 64 + idx);
+  ```
+  ```ts
+            const jitter =
+              phaseJitter > 0 ? seededGaussian(t * 100 + idx + noiseSeed) * phaseJitter : 0;
+  ```
+  ```ts
+          const testGrid = baseGrid.map((val, idx) => {
+            if (trial === 0) return val;
+            // Flip ~2 pixels per noisy trial
+            const r = Math.abs(Math.sin((c * 100 + trial * 37 + idx + noiseSeed) * 19.19));
+            return r > 0.96 ? (val === 1 ? 0 : 1) : val;
+          });
+  ```
+- **Thay bằng:**
+
+  (a) Tạo file `src/utils/random.ts`:
+  ```ts
+  // Deterministic, high-quality PRNG utilities (no Math.random) for reproducible noise
+
+  // Mulberry32: 32-bit state PRNG returning floats in [0, 1)
+  export function mulberry32(seed: number): () => number {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  // Combine integer parts into one well-mixed 32-bit seed (FNV-1a + murmur3 finalizer)
+  export function hashSeed(...parts: number[]): number {
+    let h = 0x811c9dc5;
+    for (const p of parts) {
+      h = Math.imul(h ^ (p | 0), 0x01000193);
+    }
+    h ^= h >>> 16;
+    h = Math.imul(h, 0x85ebca6b);
+    h ^= h >>> 13;
+    h = Math.imul(h, 0xc2b2ae35);
+    h ^= h >>> 16;
+    return h >>> 0;
+  }
+
+  // Standard normal sample N(0, 1) via Box-Muller, fully determined by seed
+  export function seededGaussian(seed: number): number {
+    const rng = mulberry32(seed);
+    const u1 = Math.max(1e-12, rng());
+    const u2 = rng();
+    return Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+  }
+  ```
+  (b) `VisionSNN.tsx`: xóa hàm `seededGaussian` cục bộ (dòng 71-78) và import:
+  ```ts
+  import { mulberry32, hashSeed, seededGaussian } from '../utils/random';
+  ```
+  Nhiễu ghi trọng số (dòng 186-187), dùng các "kênh" 1 và 2 tách biệt:
+  ```ts
+            const nRe = seededGaussian(hashSeed(noiseSeed, 1, c, idx));
+            const nIm = seededGaussian(hashSeed(noiseSeed, 2, c, idx));
+  ```
+  Jitter pha đầu vào (dòng 243). Không phụ thuộc `o`, vì cả 4 neuron nhận cùng một input:
+  ```ts
+            const jitter =
+              phaseJitter > 0 ? seededGaussian(hashSeed(noiseSeed, 3, t, idx)) * phaseJitter : 0;
+  ```
+  Lật pixel benchmark (dòng 339-343):
+  ```ts
+          // Flip each pixel independently with p = 2/64 (expected 2 flips per noisy trial)
+          const rng = mulberry32(hashSeed(noiseSeed, 4, c, trial));
+          const testGrid = baseGrid.map(val => {
+            if (trial === 0) return val;
+            return rng() < 2 / 64 ? (val === 1 ? 0 : 1) : val;
+          });
+  ```
+  (Lưu ý: `rng` phải tạo **ngoài** `.map` để mỗi pixel nhận một số ngẫu nhiên khác nhau. `.map` chạy tuần tự nên kết quả vẫn tất định.)
+- **Vì sao đây là cách tốt nhất:**
+  - Mulberry32 với seed trộn bằng FNV-1a và murmur3 finalizer cho chuỗi độc lập thống kê cho mỗi bộ (noiseSeed, kênh, c, trial, idx). Mỗi lần "Resample" ra một mẫu nhiễu hoàn toàn mới nhưng vẫn tái lập được.
+  - Kênh 1–4 tách bạch để nhiễu ghi trọng số, jitter và lật pixel không tương quan với nhau.
+  - Dùng `Math.random()` thì UI sẽ nhảy số mỗi lần render, nên không chọn.
+- **Kiểm tra:** Trong console:
+  ```ts
+  let s=0; for(let k=0;k<10000;k++){const r=mulberry32(hashSeed(1,4,k%4,1+k));let f=0;for(let i=0;i<64;i++) if(r()<2/64) f++; s+=f;} s/10000
+  ```
+  Kết quả ≈ 2.0. Bấm "Resample Chip Noise" vài lần → accuracy/RMS thay đổi thật sự giữa các lần.
+
+---
+
+### 1.14 "RMS Conductance Error" thực ra là trung bình trị tuyệt đối — `src/components/VisionSNN.tsx:326-333`
+
+- **Vấn đề:** Code cộng `|ΔW|` rồi chia N, đó là MAE, nhưng UI (dòng 675-676) ghi "RMS". MAE ≤ RMS, nên số hiển thị đang lạc quan hơn thực tế.
+- **Code hiện tại:**
+  ```ts
+          avgRmsError += Math.sqrt(diffRe * diffRe + diffIm * diffIm) / maxWeightMag;
+        }
+      }
+      avgRmsError /= 4 * 64;
+  ```
+- **Thay bằng:**
+  ```ts
+          avgRmsError += (diffRe * diffRe + diffIm * diffIm) / (maxWeightMag * maxWeightMag);
+        }
+      }
+      // RMS of complex weight error, normalized to full-scale conductance
+      avgRmsError = Math.sqrt(avgRmsError / (4 * 64));
+  ```
+- **Vì sao đây là cách tốt nhất:** Đúng định nghĩa RMS của sai số phức, `sqrt(mean |ΔW|²) / G_max`. Giữ nguyên nhãn "RMS" và giá trị trả về `rmsWeightErrorPercent`, nên không phải sửa UI.
+- **Kiểm tra:** Đặt write noise > 0 → số % RMS mới ≥ số cũ. Đặt write noise = 0 và bits = 0 → 0.0%.
+
+---
+
+### 1.15 Vẽ pixel bị "kẹt" khi thả chuột ngoài component — `src/components/VisionSNN.tsx:382-390, 427`
+
+- **Vấn đề:** `onMouseUp` chỉ gắn ở `<div>` gốc của component. Nhấn chuột trên lưới, kéo ra ngoài rồi thả, thì `isDrawing` vẫn là `true`, và lần sau rê chuột qua lưới sẽ tự tô pixel dù không nhấn. Ngoài ra `handlePixelMouseEnter` dùng `grid` từ closure; khi rê nhanh có thể mất pixel.
+- **Code hiện tại:**
+  ```ts
+    const handlePixelMouseEnter = (idx: number) => {
+      if (!isDrawing) return;
+      const newGrid = [...grid];
+      newGrid[idx] = drawValue;
+      setGrid(newGrid);
+    };
+  ```
+  ```tsx
+      <div className="space-y-6" onMouseUp={handlePixelMouseUp}>
+  ```
+- **Thay bằng:**
+  ```ts
+    const handlePixelMouseEnter = (idx: number) => {
+      if (!isDrawing) return;
+      setGrid(prev => {
+        if (prev[idx] === drawValue) return prev;
+        const next = [...prev];
+        next[idx] = drawValue;
+        return next;
+      });
+    };
+
+    // End drawing on mouseup anywhere in the window, not only inside the component
+    useEffect(() => {
+      if (!isDrawing) return;
+      const stop = () => setIsDrawing(false);
+      window.addEventListener('mouseup', stop);
+      window.addEventListener('blur', stop);
+      return () => {
+        window.removeEventListener('mouseup', stop);
+        window.removeEventListener('blur', stop);
+      };
+    }, [isDrawing]);
+  ```
+  Và bỏ `onMouseUp` khỏi div gốc:
+  ```tsx
+      <div className="space-y-6">
+  ```
+  (Có thể xóa luôn `handlePixelMouseUp` nếu không còn dùng.)
+- **Vì sao đây là cách tốt nhất:**
+  - Listener trên `window` bắt được mọi lần thả chuột, kể cả ngoài trình duyệt (qua `blur`).
+  - Listener chỉ được gắn khi đang vẽ, nên không tốn tài nguyên lúc rảnh.
+  - Functional `setGrid` tránh mất pixel khi nhiều `mouseenter` xảy ra trước khi re-render.
+- **Kiểm tra:** Nhấn giữ trên một pixel, kéo chuột ra ngoài khung trình duyệt rồi thả, rồi rê lại qua lưới → không pixel nào bị tô thêm. Rê nhanh qua một hàng khi đang giữ chuột → cả hàng được tô liên tục.
+
+---
+
+**Sau khi sửa xong Prompt 1:** chạy `npm run lint` (phải 0 lỗi) và `npm run dev`. Liệt kê lại từng mục 1.1 → 1.15 kèm file:dòng đã sửa.

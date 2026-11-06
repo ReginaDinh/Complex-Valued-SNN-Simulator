@@ -344,7 +344,7 @@ export default function TheoryTab() {
             <span>{isEn ? 'Phase-Preserving Vectorial Reset' : 'Cơ Chế Reset Vector Giữ Pha'}</span>
           </h3>
           <div className="p-3 bg-[#07090e] rounded-lg border border-slate-800/80 text-xs font-mono">
-            <BlockMath math="|U(t)| \ge \theta \implies U(t) \leftarrow U(t) - \theta \cdot e^{j \arg U(t)}" />
+            <BlockMath math="|U(t)| \ge V_{th} \implies U(t) \leftarrow U(t) - V_{th} \cdot e^{j \arg U(t)}" />
           </div>
           <p className="text-xs text-elegant-text/75 leading-relaxed">
             {isEn

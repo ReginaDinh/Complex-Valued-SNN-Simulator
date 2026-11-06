@@ -72,7 +72,7 @@ export default function NeuronTab() {
       let spks = 0;
       for (let step = 0; step < 50; step++) {
         const [inRe, inIm] = complex.fromPolar(inputAmp, omega * step + inputPhase);
-        if (testNeuron.step(inRe, inIm).spiked) spks++;
+        if (testNeuron.step(inRe, inIm, false).spiked) spks++;
       }
 
       points.push({
@@ -84,9 +84,13 @@ export default function NeuronTab() {
     return points;
   }, [leakMag, leakPhase, threshold, resetMode, inputAmp, inputPhase]);
 
-  // Initialize neuron
+  // Initialize neuron once, then update parameters in place so the trajectory stays continuous
   useEffect(() => {
-    neuronRef.current = new ComplexLIFNeuron(leakMag, leakPhase, threshold, resetMode);
+    if (neuronRef.current) {
+      neuronRef.current.setParams(leakMag, leakPhase, threshold, resetMode);
+    } else {
+      neuronRef.current = new ComplexLIFNeuron(leakMag, leakPhase, threshold, resetMode);
+    }
   }, [leakMag, leakPhase, threshold, resetMode]);
 
   // Background Canvas (Static Grid & Threshold Circle)
@@ -167,13 +171,13 @@ export default function NeuronTab() {
             totalSpikesRef.current += 1;
           }
 
-          setLiveStats({
+          setLiveStats(prev => ({
             spikeCount: totalSpikesRef.current,
             lastSpikeAngleDeg: stepRes.spiked
               ? (stepRes.preResetAngle * 180) / Math.PI
-              : liveStats.lastSpikeAngleDeg,
+              : prev.lastSpikeAngleDeg,
             instantMag: stepRes.preResetMag,
-          });
+          }));
 
           historyRef.current.push({
             t: tStep,
@@ -247,24 +251,32 @@ export default function NeuronTab() {
             tCtx.lineTo(w, h / 2);
             tCtx.stroke();
 
-            const threshY_top = h / 2 - threshold * (h * 0.35);
-            const threshY_bot = h / 2 + threshold * (h * 0.35);
+            const th = neuronRef.current.threshold;
+            const pts = historyRef.current;
+
+            // Auto-fit vertical scale so both ±V_th and the full trace stay on-canvas
+            let peak = th;
+            for (let i = 0; i < pts.length; i++) {
+              const re = pts[i].spiked ? pts[i].preRe : pts[i].uRe;
+              const im = pts[i].spiked ? pts[i].preIm : pts[i].uIm;
+              peak = Math.max(peak, Math.hypot(re, im));
+            }
+            const ySc = (h / 2 - 12) / (peak * 1.1);
+
+            // Threshold applies to |U| only → one line at +Vth, labelled as a magnitude threshold
+            const threshY = h / 2 - th * ySc;
             tCtx.strokeStyle = 'rgba(248, 113, 113, 0.4)';
             tCtx.setLineDash([4, 4]);
             tCtx.beginPath();
-            tCtx.moveTo(0, threshY_top);
-            tCtx.lineTo(w, threshY_top);
-            tCtx.moveTo(0, threshY_bot);
-            tCtx.lineTo(w, threshY_bot);
+            tCtx.moveTo(0, threshY);
+            tCtx.lineTo(w, threshY);
             tCtx.stroke();
             tCtx.setLineDash([]);
 
             tCtx.fillStyle = '#F87171';
             tCtx.font = '9px monospace';
-            tCtx.fillText(`+Vth (${threshold.toFixed(1)})`, 5, threshY_top - 4);
-            tCtx.fillText(`-Vth (-${threshold.toFixed(1)})`, 5, threshY_bot + 10);
+            tCtx.fillText(`|U| = Vth (${th.toFixed(2)})`, 5, threshY - 4);
 
-            const pts = historyRef.current;
             if (pts.length > 1) {
               const dx = w / 60;
 
@@ -275,7 +287,7 @@ export default function NeuronTab() {
               for (let i = 0; i < pts.length; i++) {
                 const x = i * dx;
                 const valRe = pts[i].spiked ? pts[i].preRe : pts[i].uRe;
-                const y = h / 2 - valRe * (h * 0.35);
+                const y = h / 2 - valRe * ySc;
                 if (i === 0) tCtx.moveTo(x, y);
                 else tCtx.lineTo(x, y);
               }
@@ -288,11 +300,27 @@ export default function NeuronTab() {
               for (let i = 0; i < pts.length; i++) {
                 const x = i * dx;
                 const valIm = pts[i].spiked ? pts[i].preIm : pts[i].uIm;
-                const y = h / 2 - valIm * (h * 0.35);
+                const y = h / 2 - valIm * ySc;
                 if (i === 0) tCtx.moveTo(x, y);
                 else tCtx.lineTo(x, y);
               }
               tCtx.stroke();
+
+              // Magnitude |U| (pre-reset at spike steps) — the quantity actually compared against Vth
+              tCtx.beginPath();
+              tCtx.strokeStyle = '#E5E7EB';
+              tCtx.lineWidth = 1.4;
+              tCtx.setLineDash([3, 2]);
+              for (let i = 0; i < pts.length; i++) {
+                const x = i * dx;
+                const re = pts[i].spiked ? pts[i].preRe : pts[i].uRe;
+                const im = pts[i].spiked ? pts[i].preIm : pts[i].uIm;
+                const y = h / 2 - Math.hypot(re, im) * ySc;
+                if (i === 0) tCtx.moveTo(x, y);
+                else tCtx.lineTo(x, y);
+              }
+              tCtx.stroke();
+              tCtx.setLineDash([]);
 
               // Spikes as vertical red columns
               for (let i = 0; i < pts.length; i++) {
@@ -517,9 +545,12 @@ export default function NeuronTab() {
                   <span>{isEn ? 'Lock Resonance' : 'Khóa Cộng Hưởng'}</span>
                 </button>
                 <button
-                  onClick={() =>
-                    setInputFreq(Number(Math.min(0.25, resonantFreq + 0.12).toFixed(3)))
-                  }
+                  onClick={() => {
+                    // Move ~0.12 cycles/step away from resonance, staying inside slider range [0.01, 0.25]
+                    const detuned =
+                      resonantFreq + 0.12 <= 0.25 ? resonantFreq + 0.12 : resonantFreq - 0.12;
+                    setInputFreq(Number(Math.max(0.01, detuned).toFixed(3)));
+                  }}
                   className="py-1.5 px-2 bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/35 text-rose-300 rounded text-[10px] font-mono font-bold transition cursor-pointer"
                 >
                   {isEn ? 'Detune (Off-Phase)' : 'Lệch Pha Cưỡng Bức'}
@@ -652,9 +683,15 @@ export default function NeuronTab() {
                 </span>
               </div>
               <div className="flex items-center gap-1.5">
+                <span className="w-3.5 h-1 bg-[#E5E7EB] inline-block rounded"></span>
+                <span className="text-elegant-text">
+                  {isEn ? 'Magnitude |U| (compared to Vth)' : 'Biên độ |U| (so với Vth)'}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
                 <span className="w-3.5 h-1 bg-[#F87171] inline-block rounded"></span>
                 <span className="text-elegant-text">
-                  {isEn ? 'Spike / Threshold' : 'Sự kiện Xung / Ngưỡng'}
+                  {isEn ? 'Spike / |U| Threshold' : 'Sự kiện Xung / Ngưỡng |U|'}
                 </span>
               </div>
             </div>

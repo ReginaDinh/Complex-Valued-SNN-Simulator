@@ -7,6 +7,14 @@ import {
 import { useLanguage } from '../contexts/LanguageContext';
 import { BlockMath, InlineMath } from 'react-katex';
 
+// Renders plain text where math segments are wrapped in $...$ (KaTeX inline).
+function renderWithMath(text: string): React.ReactNode {
+  const parts = text.split(/\$([^$]+)\$/g);
+  return parts.map((part, i) =>
+    i % 2 === 1 ? <InlineMath key={i} math={part} /> : <React.Fragment key={i}>{part}</React.Fragment>
+  );
+}
+
 export default function SNNComparison() {
   const { language } = useLanguage();
   const isEn = language === 'en';
@@ -25,12 +33,10 @@ export default function SNNComparison() {
 
   // Auto-play loop for the leakage simulation spiral
   useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (isAutoPlay) {
-      interval = setInterval(() => {
-        setCurrentStep((prev) => (prev + 1) % (simSteps + 1));
-      }, 500);
-    }
+    if (!isAutoPlay) return;
+    const interval: ReturnType<typeof setInterval> = setInterval(() => {
+      setCurrentStep(prev => (prev + 1) % (simSteps + 1));
+    }, 500);
     return () => clearInterval(interval);
   }, [isAutoPlay, simSteps]);
 
@@ -58,19 +64,36 @@ export default function SNNComparison() {
     return Math.sqrt(complexSum.re * complexSum.re + complexSum.im * complexSum.im);
   }, [complexSum]);
 
-  const sumPhase = useMemo(() => {
+  // Phase of a (numerically) zero vector is undefined → null.
+  const sumPhase = useMemo<number | null>(() => {
+    if (sumMag < 1e-6) return null;
     let angle = Math.atan2(complexSum.im, complexSum.re) * (180 / Math.PI);
     if (angle < 0) angle += 360;
     return angle;
-  }, [complexSum]);
+  }, [complexSum, sumMag]);
+
+  // Interference classification based on the actual vector result, not raw slider values.
+  // coherence = |A+B| / (|A|+|B|) ∈ [0, 1]: 1 = fully constructive, 0 = full cancellation.
+  const interference = useMemo(() => {
+    const EPS = 1e-6;
+    const coherence = sumMag / Math.max(EPS, magA + magB);
+    if (sumMag < EPS) return { en: 'Complete Cancellation', vi: 'Triệt tiêu hoàn toàn' };
+    if (coherence > 1 - EPS) return { en: 'Maximum In-Phase', vi: 'Đồng pha tối đa' };
+    if (coherence < Math.abs(magA - magB) / Math.max(EPS, magA + magB) + EPS)
+      return { en: 'Anti-Phase (Partial Cancellation)', vi: 'Ngược pha (triệt tiêu một phần)' };
+    return coherence >= Math.SQRT1_2
+      ? { en: 'Constructive Interference', vi: 'Giao thoa tăng cường' }
+      : { en: 'Destructive Interference', vi: 'Giao thoa triệt tiêu' };
+  }, [sumMag, magA, magB]);
 
   // Traditional SNN summation (strictly scalar addition of magnitudes / rate coding)
   const traditionalSum = magA + magB;
 
   // Calculate coordinates for SVG visualization of vector addition
-  // Center is (150, 150), scale factor is 80 (since max mag is 1.5)
-  const SVG_CENTER = 150;
-  const SVG_SCALE = 70;
+  // SVG is 260×260 → center (130, 130). Max |A+B| = 1.2 + 1.2 = 2.4 → 2.4 × 50 = 120px fits inside the 130px half-width.
+  const SVG_SIZE = 260;
+  const SVG_CENTER = SVG_SIZE / 2;
+  const SVG_SCALE = 50;
 
   const getCoords = (mag: number, rad: number) => {
     return {
@@ -314,19 +337,19 @@ export default function SNNComparison() {
           <div className="lg:col-span-4 flex flex-col items-center justify-center bg-elegant-bg/70 p-4 rounded-xl border border-elegant-muted/10 h-[320px]">
             <span className="text-[10px] font-mono text-elegant-muted uppercase font-bold mb-2">{isEn ? 'Gaussian Complex Plane Graph' : 'Đồ thị Mặt phẳng Phức Gauss'}</span>
             
-            <svg width="260" height="260" className="bg-[#0b1016]/90 border border-elegant-muted/5 rounded-xl">
+            <svg width={SVG_SIZE} height={SVG_SIZE} className="bg-[#0b1016]/90 border border-elegant-muted/5 rounded-xl">
               {/* Grid axes */}
-              <line x1="130" y1="10" x2="130" y2="250" stroke="#1d2836" strokeWidth="1" strokeDasharray="3 3" />
-              <line x1="10" y1="130" x2="250" y2="130" stroke="#1d2836" strokeWidth="1" strokeDasharray="3 3" />
+              <line x1={SVG_CENTER} y1="10" x2={SVG_CENTER} y2={SVG_SIZE - 10} stroke="#1d2836" strokeWidth="1" strokeDasharray="3 3" />
+              <line x1="10" y1={SVG_CENTER} x2={SVG_SIZE - 10} y2={SVG_CENTER} stroke="#1d2836" strokeWidth="1" strokeDasharray="3 3" />
               
               {/* Unit circle */}
-              <circle cx="130" cy="130" r={SVG_SCALE} fill="none" stroke="#253545" strokeWidth="1" />
-              <text x="135" y="24" fill="#5a7187" className="text-[9px] font-mono">{isEn ? 'Im (Orthogonal)' : 'Im (Trực giao)'}</text>
-              <text x="190" y="125" fill="#5a7187" className="text-[9px] font-mono">{isEn ? 'Re (Co-phase)' : 'Re (Đồng pha)'}</text>
+              <circle cx={SVG_CENTER} cy={SVG_CENTER} r={SVG_SCALE} fill="none" stroke="#253545" strokeWidth="1" />
+              <text x={SVG_CENTER + 5} y="24" fill="#5a7187" className="text-[9px] font-mono">{isEn ? 'Im (Orthogonal)' : 'Im (Trực giao)'}</text>
+              <text x={SVG_CENTER + 60} y={SVG_CENTER - 5} fill="#5a7187" className="text-[9px] font-mono">{isEn ? 'Re (Co-phase)' : 'Re (Đồng pha)'}</text>
 
               {/* Vector A (Red) */}
               <line 
-                x1="130" y1="130" 
+                x1={SVG_CENTER} y1={SVG_CENTER} 
                 x2={coordA.x} y2={coordA.y} 
                 stroke="#ef4444" strokeWidth="2.5" 
                 strokeLinecap="round"
@@ -343,7 +366,7 @@ export default function SNNComparison() {
               />
               {/* Vector B original for display */}
               <line 
-                x1="130" y1="130" 
+                x1={SVG_CENTER} y1={SVG_CENTER} 
                 x2={coordB.x} y2={coordB.y} 
                 stroke="#6366f1" strokeWidth="2" 
                 strokeLinecap="round"
@@ -353,7 +376,7 @@ export default function SNNComparison() {
 
               {/* Vector Sum (Cyan) */}
               <line 
-                x1="130" y1="130" 
+                x1={SVG_CENTER} y1={SVG_CENTER} 
                 x2={coordSum.x} y2={coordSum.y} 
                 stroke="#00f2fe" strokeWidth="3" 
                 strokeLinecap="round"
@@ -390,14 +413,11 @@ export default function SNNComparison() {
                 <span className="font-mono text-sm font-black text-elegant-cyan">{sumMag.toFixed(2)}</span>
               </div>
               <div className="flex justify-between text-[10px] font-mono text-elegant-muted">
-                <span>{isEn ? `Total phase angle: ${sumPhase.toFixed(0)}°` : `Góc pha tổng: ${sumPhase.toFixed(0)}°`}</span>
                 <span>
-                  {Math.abs(phaseA - phaseB) === 180 
-                    ? (isEn ? 'Complete Cancellation' : 'Triệt tiêu hoàn toàn') 
-                    : Math.abs(phaseA - phaseB) === 0 
-                      ? (isEn ? 'Maximum In-Phase' : 'Đồng pha tối đa') 
-                      : (isEn ? 'Partial Interference' : 'Giao thoa bán phần')}
+                  {isEn ? 'Total phase angle: ' : 'Góc pha tổng: '}
+                  {sumPhase === null ? (isEn ? '— (undefined)' : '— (không xác định)') : `${sumPhase.toFixed(0)}°`}
                 </span>
+                <span>{isEn ? interference.en : interference.vi}</span>
               </div>
               <p className="text-[10px] text-elegant-text/70 leading-normal">
                 {isEn ? 'Synthesized via ' : 'Tổng hợp thông qua '}<strong>{isEn ? 'vector addition' : 'phép cộng vector'}</strong>{isEn ? '. If phase shift is 180°, they completely cancel to 0. If in-phase, they resonate strongly!' : '. Nếu lệch pha 180°, chúng triệt tiêu nhau về 0. Nếu đồng pha, chúng cộng hưởng mạnh mẽ!'}
@@ -660,7 +680,7 @@ function InteractiveArchitecture() {
   // node details for Complex-valued SNN
   const complexNodeDetails: Record<string, { title: string; subtitle: string; formula: string; explanation: string; hardware: string; icon: React.ReactNode }> = {
     inputs: {
-      title: isEn ? 'Input Spikes (s_i(t))' : 'Luồng Xung Đầu Vào (Input Spikes - s_i(t))',
+      title: isEn ? 'Input Spikes ($s_i(t)$)' : 'Luồng Xung Đầu Vào (Input Spikes - $s_i(t)$)',
       subtitle: isEn ? 'Binary event combined with micro-timing coding' : 'Sự kiện nhị phân kết hợp mã hóa thời gian vi mô',
       formula: isEn ? "s_i(t) \\in \\{0, 1\\} \\quad \\text{or} \\quad s_i(t) = e^{j\\theta_i}" : "s_i(t) \\in \\{0, 1\\} \\quad \\text{hoặc} \\quad s_i(t) = e^{j\\theta_i}",
       explanation: isEn ? 'In advanced complex SNNs, the spike itself can carry a distinct phase angle representing micro-timing or relative bio-rhythm, multiplying information density compared to mere spike counting.' : 'Trong mạng nổ xung số phức nâng cao, bản thân xung có thể mang một góc pha góc riêng biệt đại diện cho mốc thời gian vi mô (sub-millisecond timing) hoặc chu kỳ nhịp sinh học tương đối, giúp tăng mật độ biểu diễn thông tin lên nhiều lần so với chỉ đếm số lượng xung.',
@@ -668,15 +688,15 @@ function InteractiveArchitecture() {
       icon: <Activity className="w-5 h-5 text-elegant-cyan" />
     },
     weights: {
-      title: isEn ? 'Complex Synapse Weights (W_i)' : 'Trọng Số Synapse Số Phức (Complex Weights - W_i)',
+      title: isEn ? 'Complex Synapse Weights ($W_i$)' : 'Trọng Số Synapse Số Phức (Complex Weights - $W_i$)',
       subtitle: isEn ? 'Amplitude modulation and instantaneous phase rotation' : 'Điều biến biên độ và xoay pha tức thời',
       formula: "W_i = M_i \\cdot e^{j\\phi_i} = W_{re} + j W_{im}",
-      explanation: isEn ? "Synaptic weight is a complex quantity. When a spike passes, its intensity scales by M_i, and its timing shifts by phase angle \\phi_i. This perfectly mimics the natural phase-delay property of biological synapses." : "Trọng số khớp thần kinh (Synapse) là một đại lượng số phức. Khi xung điện đi qua, cường độ của nó được co giãn theo biên độ M_i, đồng thời mốc thời gian xung bị dịch đi một góc pha \\phi_i (làm trễ hoặc đẩy sớm dòng điện đầu vào). Đây là cơ chế mô phỏng hoàn hảo tính chất trễ pha tự nhiên của synapse sinh học.",
+      explanation: isEn ? "Synaptic weight is a complex quantity. When a spike passes, its intensity scales by $M_i$, and its timing shifts by phase angle $\\phi_i$. This perfectly mimics the natural phase-delay property of biological synapses." : "Trọng số khớp thần kinh (Synapse) là một đại lượng số phức. Khi xung điện đi qua, cường độ của nó được co giãn theo biên độ $M_i$, đồng thời mốc thời gian xung bị dịch đi một góc pha $\\phi_i$ (làm trễ hoặc đẩy sớm dòng điện đầu vào). Đây là cơ chế mô phỏng hoàn hảo tính chất trễ pha tự nhiên của synapse sinh học.",
       hardware: isEn ? 'Directly mapped onto two PCM (Phase-Change Memory) memristors in parallel representing Real and Imaginary (Re & Im) parts, or modulating physical conductance angle in multi-level memory devices.' : 'Ánh xạ trực tiếp lên hai phần tử memristor PCM (Phase-Change Memory) mắc song song biểu diễn phần Thực và phần Ảo (Re & Im), hoặc điều biến góc dẫn nạp vật lý trong thiết bị nhớ đa mức.',
       icon: <Sliders className="w-5 h-5 text-amber-400" />
     },
     dendrite: {
-      title: isEn ? "Dendritic Summation (\\Sigma)" : "Tích Hợp Nhánh Cây (Dendritic Summation - \\Sigma)",
+      title: isEn ? "Dendritic Summation ($\\Sigma$)" : "Tích Hợp Nhánh Cây (Dendritic Summation - $\\Sigma$)",
       subtitle: isEn ? 'Differential phase interference on heat dissipation network' : 'Giao thoa sóng pha vi sai trên mạng tản nhiệt',
       formula: "I_{syn}(t) = \\sum_{i} W_i \\cdot s_i(t) \\in \\mathbb{C}",
       explanation: isEn ? 'At the Dendrite, all complex current streams are collected and summed as 2D vectors on the complex plane. If two input signals are in-phase, they resonate strongly, spiking the membrane potential. Conversely, if 180° out-of-phase, they cancel each other out.' : 'Tại nhánh cây (Dendrite), tất cả các luồng dòng điện phức được gom và cộng lại với nhau dưới dạng vector 2D trên mặt phẳng số phức. Nếu hai luồng tín hiệu đầu vào đồng pha (in-phase), chúng sẽ cộng hưởng mạnh mẽ làm điện thế màng tăng vọt. Ngược lại, nếu lệch pha 180° (out-of-phase), chúng sẽ tự triệt tiêu lẫn nhau.',
@@ -684,18 +704,18 @@ function InteractiveArchitecture() {
       icon: <GitCompare className="w-5 h-5 text-elegant-cyan" />
     },
     soma: {
-      title: isEn ? 'cLIF Membrane Potential (U(t))' : 'Điện Thế Màng cLIF (Membrane Potential - U(t))',
+      title: isEn ? 'cLIF Membrane Potential ($U(t)$)' : 'Điện Thế Màng cLIF (Membrane Potential - $U(t)$)',
       subtitle: isEn ? '2D energy accumulation & oscillation rhythm' : 'Hai chiều tích lũy năng lượng & nhịp dao động',
       formula: "U(t) = U(t-1) \\cdot \\lambda e^{j\\omega} + I_{syn}(t)",
-      explanation: isEn ? "cLIF membrane potential is a complex number U(t). It accumulates both real (energy) and imaginary (endogenous phase) parts. During leakage, the potential shrinks while continuously rotating phase by \\omega, forming a spiral trajectory." : "Điện thế màng của neuron cLIF là một số phức U(t) = V(t) + j Y(t). Biến này tích lũy cả phần thực (năng lượng điện tích lũy) lẫn phần ảo (pha dao động nội sinh). Khi rò rỉ (leak), điện thế màng sẽ tự động rò rỉ thu hẹp biên độ đồng thời xoay pha liên tục góc \\omega tạo thành quỹ đạo xoắn ốc tuyệt đẹp.",
+      explanation: isEn ? "cLIF membrane potential is a complex number $U(t)$. It accumulates both real (energy) and imaginary (endogenous phase) parts. During leakage, the potential shrinks while continuously rotating phase by $\\omega$, forming a spiral trajectory." : "Điện thế màng của neuron cLIF là một số phức $U(t) = V(t) + jY(t)$. Biến này tích lũy cả phần thực (năng lượng điện tích lũy) lẫn phần ảo (pha dao động nội sinh). Khi rò rỉ (leak), điện thế màng sẽ tự động rò rỉ thu hẹp biên độ đồng thời xoay pha liên tục góc $\\omega$ tạo thành quỹ đạo xoắn ốc tuyệt đẹp.",
       hardware: isEn ? 'Analog integrated circuit using capacitors for real/imaginary accumulation and inductors/feedback ICs to maintain oscillation phase.' : 'Mạch tích hợp tương tự (Analog) sử dụng tụ điện cho phần tích lũy thực/ảo và cuộn cảm/mạch tích hợp hồi tiếp để duy trì pha dao động.',
       icon: <Zap className="w-5 h-5 text-indigo-400" />
     },
     threshold: {
-      title: isEn ? "Circular Thresholding (|U| \\ge \\theta)" : "Bộ So Ngưỡng Vòng Tròn (Circular Thresholding - |U| \\ge \\theta)",
+      title: isEn ? "Circular Thresholding ($|U| \\ge V_{th}$)" : "Bộ So Ngưỡng Vòng Tròn (Circular Thresholding - $|U| \\ge V_{th}$)",
       subtitle: isEn ? '2D spike firing and state reset' : 'Nổ xung hai chiều và hồi phục trạng thái',
-      formula: "|U(t)| \\ge \\theta_{thres} \\implies S_{out}(t) = 1, \\ U(t) \\leftarrow 0",
-      explanation: isEn ? "Unlike traditional SNNs, cLIF neuron sets a circular boundary of radius \\theta on the complex plane. When membrane amplitude exceeds this circle, the neuron fires a spike." : "Khác hoàn toàn với SNN truyền thống, cLIF neuron thiết lập một đường biên tròn bán kính \\theta trên mặt phẳng số phức Gauss. Khi biên độ điện thế màng |U(t)| vượt khỏi vòng tròn an toàn này, neuron lập tiếp phát xung phát xạ (spike) ra sợi trục Axon.",
+      formula: "|U(t)| \\ge V_{th} \\implies S_{out}(t) = e^{j \\arg U(t)}, \\ U(t) \\leftarrow U(t) - V_{th} e^{j \\arg U(t)}",
+      explanation: isEn ? "Unlike traditional SNNs, cLIF neuron sets a circular boundary of radius $V_{th}$ on the complex plane. When membrane amplitude exceeds this circle, the neuron fires a spike." : "Khác hoàn toàn với SNN truyền thống, cLIF neuron thiết lập một đường biên tròn bán kính $V_{th}$ trên mặt phẳng số phức Gauss. Khi biên độ điện thế màng $|U(t)|$ vượt khỏi vòng tròn an toàn này, neuron lập tiếp phát xung phát xạ (spike) ra sợi trục Axon.",
       hardware: isEn ? 'Ultra-sensitive Analog Comparator triggers when vector amplitude exceeds circular voltage polarization threshold.' : 'Bộ so sánh dòng rò siêu dẫn tương tự (Analog Comparator) cực nhạy kích hoạt khi biên độ vector vượt quá ngưỡng phân cực điện áp tròn.',
       icon: <Sparkles className="w-5 h-5 text-emerald-400" />
     }
@@ -704,7 +724,7 @@ function InteractiveArchitecture() {
   // node details for Traditional SNN
   const traditionalNodeDetails: Record<string, { title: string; subtitle: string; formula: string; explanation: string; hardware: string; icon: React.ReactNode }> = {
     inputs: {
-      title: isEn ? 'Input Spikes (s_i(t))' : 'Luồng Xung Đầu Vào (Input Spikes - s_i(t))',
+      title: isEn ? 'Input Spikes ($s_i(t)$)' : 'Luồng Xung Đầu Vào (Input Spikes - $s_i(t)$)',
       subtitle: isEn ? 'Simple 1D binary event' : 'Sự kiện nhị phân đơn giản 1D',
       formula: "s_i(t) \\in \\{0, 1\\}",
       explanation: isEn ? 'In traditional SNN, the input is a temporal sequence of binary spikes. State at time t is either 0 (no spike) or 1 (spike). This value contains absolutely no phase angle or micro-timing rotation information.' : 'Trong SNN truyền thống, đầu vào là một chuỗi xung nhị phân diễn ra theo thời gian. Trạng thái tại thời điểm t chỉ là 0 (không có xung) hoặc 1 (có xung). Giá trị này hoàn toàn không chứa pha góc hay thông tin xoay vòng thời gian vi mô.',
@@ -712,15 +732,15 @@ function InteractiveArchitecture() {
       icon: <Activity className="w-5 h-5 text-rose-400" />
     },
     weights: {
-      title: isEn ? 'Real Synaptic Weights (W_i)' : 'Trọng Số Synapse Miền Thực (Real Weights - W_i)',
+      title: isEn ? 'Real Synaptic Weights ($W_i$)' : 'Trọng Số Synapse Miền Thực (Real Weights - $W_i$)',
       subtitle: isEn ? 'Scalar linear amplitude scaling' : 'Co giãn biên độ tuyến tính vô hướng',
       formula: "W_i \\in \\mathbb{R}",
-      explanation: isEn ? 'Synaptic weight is a real scalar. When a binary spike passes, it merely multiplies the spike amplitude by real value W_i. Positive means excitation, negative means inhibition. No ability to shift timing or phase.' : 'Trọng số khớp thần kinh là một số thực vô hướng. Khi một xung nhị phân đi qua, nó chỉ đơn thuần nhân biên độ xung với giá trị thực W_i. Giá trị dương thể hiện kích thích thần kinh, giá trị âm thể hiện ức chế thần kinh. Không có khả năng dịch chuyển mốc thời gian hay lệch pha.',
+      explanation: isEn ? 'Synaptic weight is a real scalar. When a binary spike passes, it merely multiplies the spike amplitude by real value $W_i$. Positive means excitation, negative means inhibition. No ability to shift timing or phase.' : 'Trọng số khớp thần kinh là một số thực vô hướng. Khi một xung nhị phân đi qua, nó chỉ đơn thuần nhân biên độ xung với giá trị thực $W_i$. Giá trị dương thể hiện kích thích thần kinh, giá trị âm thể hiện ức chế thần kinh. Không có khả năng dịch chuyển mốc thời gian hay lệch pha.',
       hardware: isEn ? 'Configured using a single transistor or a single-level memristor representing conductance.' : 'Được cấu hình bằng một transistor đơn lẻ hoặc một thiết bị memristor đơn mức điện trở biểu diễn độ dẫn (conductance).',
       icon: <Sliders className="w-5 h-5 text-amber-400" />
     },
     dendrite: {
-      title: isEn ? "Dendritic Summation (\\Sigma)" : "Tích Hợp Nhánh Cây (Dendritic Summation - \\Sigma)",
+      title: isEn ? "Dendritic Summation ($\\Sigma$)" : "Tích Hợp Nhánh Cây (Dendritic Summation - $\\Sigma$)",
       subtitle: isEn ? 'Direct scalar real addition' : 'Phép cộng số thực vô hướng trực tiếp',
       formula: "I_{syn}(t) = \\sum_{i} W_i \\cdot s_i(t) \\in \\mathbb{R}",
       explanation: isEn ? 'At the dendrite, incoming spikes are summed directly as 1D scalar algebraic values. No concept of phase interference, thus unable to auto-cancel out-of-phase signals or filter micro-background noise via natural differentials.' : 'Tại nhánh cây, các xung tích hợp được cộng trực tiếp với nhau dưới dạng số đại số vô hướng 1 chiều. Không có khái niệm giao thoa sóng pha, do đó không thể tự động triệt tiêu các tín hiệu lệch pha hay lọc nhiễu nền vi mô bằng phương pháp vi sai tự nhiên.',
@@ -728,18 +748,18 @@ function InteractiveArchitecture() {
       icon: <GitCompare className="w-5 h-5 text-elegant-cyan" />
     },
     soma: {
-      title: isEn ? 'LIF Membrane Potential (V(t))' : 'Điện Thế Màng LIF (Membrane Potential - V(t))',
+      title: isEn ? 'LIF Membrane Potential ($V(t)$)' : 'Điện Thế Màng LIF (Membrane Potential - $V(t)$)',
       subtitle: isEn ? 'Linear 1D energy accumulation' : 'Tích lũy năng lượng 1D tuyến tính',
       formula: "V(t) = V(t-1) \\cdot \\lambda + I_{syn}(t)",
-      explanation: isEn ? "Traditional LIF potential is a 1D real number V(t). Without spikes, energy linearly leaks to 0 over time based on \\lambda. No self-oscillating phase." : "Điện thế màng của neuron LIF truyền thống là một số thực 1 chiều V(t). Khi không có xung điện kích thích bên ngoài đi vào, năng lượng tích tụ sẽ tự động rò rỉ tuyến tính lùi dần về 0 theo thời gian dựa vào hệ số rò rỉ \\lambda. Neuron hoàn toàn không có trạng thái tự dao động pha.",
+      explanation: isEn ? "Traditional LIF potential is a 1D real number $V(t)$. Without spikes, energy linearly leaks to 0 over time based on $\\lambda$. No self-oscillating phase." : "Điện thế màng của neuron LIF truyền thống là một số thực 1 chiều $V(t)$. Khi không có xung điện kích thích bên ngoài đi vào, năng lượng tích tụ sẽ tự động rò rỉ tuyến tính lùi dần về 0 theo thời gian dựa vào hệ số rò rỉ $\\lambda$. Neuron hoàn toàn không có trạng thái tự dao động pha.",
       hardware: isEn ? 'Simple accumulator circuit using a capacitor in parallel with a leakage resistor (RC circuit) to ground.' : 'Mạch tích tụ đơn giản sử dụng một tụ điện mắc song song với một điện trở rò rỉ (RC circuit) về đất.',
       icon: <Zap className="w-5 h-5 text-indigo-400" />
     },
     threshold: {
-      title: isEn ? "Linear Thresholding (V \\ge \\theta)" : "Bộ So Ngưỡng Tuyến Tính (Linear Thresholding - V \\ge \\theta)",
+      title: isEn ? "Linear Thresholding ($V \\ge V_{th}$)" : "Bộ So Ngưỡng Tuyến Tính (Linear Thresholding - $V \\ge V_{th}$)",
       subtitle: isEn ? '1D comparison and potential discharge' : 'So sánh một chiều và xả điện thế',
-      formula: "V(t) \\ge \\theta_{thres} \\implies S_{out}(t) = 1, \\ V(t) \\leftarrow V_{reset}",
-      explanation: isEn ? "Thresholding on 1D real axis. When V(t) exceeds \\theta, neuron fires and resets to V_reset (usually 0)." : "Cơ chế so ngưỡng diễn ra trên trục số thực 1D. Khi điện thế tích tụ V(t) vượt ngưỡng \\theta_{thres}, neuron lập tức kích hoạt phát xung điện ra ngoài qua sợi trục Axon và xả cạn điện thế màng về mức nghỉ V_reset (thường là 0).",
+      formula: "V(t) \\ge V_{th} \\implies S_{out}(t) = 1, \\ V(t) \\leftarrow V_{reset}",
+      explanation: isEn ? "Thresholding on 1D real axis. When $V(t)$ exceeds $V_{th}$, neuron fires and resets to $V_{reset}$ (usually 0)." : "Cơ chế so ngưỡng diễn ra trên trục số thực 1D. Khi điện thế tích tụ $V(t)$ vượt ngưỡng $V_{th}$, neuron lập tức kích hoạt phát xung điện ra ngoài qua sợi trục Axon và xả cạn điện thế màng về mức nghỉ $V_{reset}$ (thường là 0).",
       hardware: isEn ? 'Uses a basic Voltage Comparator triggered at a fixed reference voltage.' : 'Sử dụng một bộ so sánh điện áp cơ bản (Voltage Comparator) kích hoạt ở mức điện thế chuẩn cố định.',
       icon: <Sparkles className="w-5 h-5 text-emerald-400" />
     }
@@ -972,7 +992,7 @@ function InteractiveArchitecture() {
                   className="transition-all duration-200" 
                 />
                 <text x="475" y="164" fill={selectedArch === 'complex' ? "#34d399" : "#fca5a5"} className="text-[10px] font-bold font-mono" textAnchor="middle">
-                  {selectedArch === 'complex' ? "|U| ≥ θ" : "V ≥ θ"}
+                  {selectedArch === 'complex' ? "|U| ≥ V_th" : "V ≥ V_th"}
                 </text>
                 <text x="475" y="125" fill={selectedArch === 'complex' ? "#10b981" : "#f43f5e"} className="text-[10px] font-mono font-bold uppercase tracking-wider" textAnchor="middle">
                   {selectedArch === 'complex' ? (isEn ? 'Circular Threshold' : 'Ngưỡng Tròn') : (isEn ? '1D Threshold' : 'Ngưỡng 1D')}
@@ -1001,7 +1021,7 @@ function InteractiveArchitecture() {
                 {selectedData.icon}
               </div>
               <div>
-                <h4 className="text-sm font-bold text-white font-display leading-tight">{selectedData.title}</h4>
+                <h4 className="text-sm font-bold text-white font-display leading-tight">{renderWithMath(selectedData.title)}</h4>
                 <p className="text-[10.5px] text-elegant-muted font-mono leading-none mt-1">{selectedData.subtitle}</p>
               </div>
             </div>
@@ -1018,7 +1038,7 @@ function InteractiveArchitecture() {
             <div className="space-y-2 text-xs">
               <span className="text-[11px] font-mono font-bold text-elegant-muted block uppercase tracking-wider">{isEn ? 'Mechanism of action:' : 'Cơ chế hoạt động:'}</span>
               <p className="text-elegant-text/90 leading-relaxed text-[11.5px]">
-                {selectedData.explanation}
+                {renderWithMath(selectedData.explanation)}
               </p>
             </div>
           </div>

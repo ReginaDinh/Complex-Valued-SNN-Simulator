@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import {
   Cpu,
@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { InlineMath, BlockMath } from 'react-katex';
+import { copyText } from '../utils/clipboard';
 
 export default function NeuromorphicHardwareLab() {
   const { language } = useLanguage();
@@ -151,7 +152,7 @@ smu = rm.open_resource('USB0::0x0957::0x1736::MY51140135::0::INSTR')
 smu.write("*RST")
 
 def compile_complex_weights(w_complex: np.ndarray, g_bias: float = 0.5):
-    """Decomposes W into 4 positive differential conductance matrices"""
+    """Decomposes W into 4 positive differential conductance matrices (units: mS)"""
     w_re = np.real(w_complex)
     w_im = np.imag(w_complex)
     
@@ -162,31 +163,61 @@ def compile_complex_weights(w_complex: np.ndarray, g_bias: float = 0.5):
     
     return g_re_pos, g_re_neg, g_im_pos, g_im_neg
 
-def write_verify_pulse(channel: int, target_conductance: float, max_iter: int = 4):
-    """KAIST closed-loop write-verify programming with self-correction"""
+V_READ = 0.1        # V  - low, non-disturbing read voltage
+V_SET = 1.0         # V  - base SET (potentiation) pulse amplitude
+V_RESET = -1.0      # V  - base RESET (depression) pulse amplitude, opposite polarity
+V_LIMIT = 1.5       # V  - absolute safety limit for any programming pulse
+PULSE_WIDTH = 10e-6 # s  - nominal; use the SMU pulse mode for real us-level timing
+
+def read_conductance_mS(channel: int) -> float:
+    """Measure conductance at V_READ so the read does not disturb the cell."""
+    smu.write(f"ROUT:CLOS (@{channel})")
+    smu.write(f"SOUR:VOLT:LEV {V_READ}")
+    smu.write(":OUTP ON")
+    i_read = float(smu.query("MEAS:CURR?"))
+    smu.write("OUTP OFF")
+    return i_read / V_READ * 1e3  # S -> mS
+
+def apply_pulse(channel: int, volt: float) -> None:
+    """Apply one programming pulse, then always restore the read level."""
+    volt = max(-V_LIMIT, min(V_LIMIT, volt))
+    smu.write(f"ROUT:CLOS (@{channel})")
+    smu.write(f"SOUR:VOLT:LEV {volt:.3f}")
+    smu.write(":OUTP ON")
+    time.sleep(PULSE_WIDTH)
+    smu.write("OUTP OFF")
+    smu.write(f"SOUR:VOLT:LEV {V_READ}")
+
+def write_verify_pulse(channel: int, target_mS: float, tol: float = 0.05, max_iter: int = 20) -> float:
+    """KAIST-style closed-loop write-verify: SET when below target, RESET when above."""
+    g_meas = read_conductance_mS(channel)
     for step in range(max_iter):
-        smu.write(f"ROUT:CLOS (@{channel})")
-        smu.write("SOUR:VOLT:LEV 1.2; :OUTP ON")
-        time.sleep(10e-6)
-        smu.write("OUTP OFF")
-        
-        # Read back physical current
-        i_read = float(smu.query("MEAS:CURR?"))
-        g_meas = i_read / 0.1
-        err = target_conductance - g_meas
-        if abs(err) < 0.05 * target_conductance:
+        err = target_mS - g_meas
+        if abs(err) <= tol * target_mS:
             break
-        # Apply fine adaptive correction pulse
-        smu.write(f"SOUR:VOLT:LEV {1.0 + err * 0.2}; :OUTP ON")
-        time.sleep(5e-6)
-        smu.write("OUTP OFF")
+        # Pulse amplitude grows with relative error, capped at V_LIMIT
+        rel = min(1.0, abs(err) / max(target_mS, 1e-9))
+        volt = V_SET + 0.3 * rel if err > 0 else V_RESET - 0.3 * rel
+        apply_pulse(channel, volt)
+        g_meas = read_conductance_mS(channel)
+    return g_meas
 
 print("Ready: 4-Quadrant differential crossbar calibrated with Write-Verify.")`;
 
-  const handleCopyCode = () => {
-    navigator.clipboard.writeText(pythonDriverCode);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+  }, []);
+
+  const handleCopyCode = async () => {
+    const ok = await copyText(pythonDriverCode);
+    if (!ok) {
+      console.warn('Clipboard copy failed');
+      return;
+    }
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    copiedTimerRef.current = setTimeout(() => setCopied(false), 2000);
   };
 
   return (

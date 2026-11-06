@@ -2,6 +2,7 @@ import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Terminal, Cpu, Check, Copy, Info, AlertCircle } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
+import { copyText } from '../utils/clipboard';
 
 interface HardwareIntegrationModalProps {
   isOpen: boolean;
@@ -116,10 +117,20 @@ for epoch in range(10):
     print(f${isEn ? '"Epoch {epoch+1}/10 | Physical Network Loss: {total_loss:.4e}"' : '"Epoch {epoch+1}/10 | Tổn thất Mạng vật lý: {total_loss:.4e}"'})
 `;
 
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(pythonCode);
+  const copiedTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  React.useEffect(() => () => {
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+  }, []);
+
+  const copyToClipboard = async () => {
+    const ok = await copyText(pythonCode);
+    if (!ok) {
+      console.warn('Clipboard copy failed');
+      return;
+    }
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    copiedTimerRef.current = setTimeout(() => setCopied(false), 2000);
   };
 
   return (
@@ -197,24 +208,6 @@ for epoch in range(10):
                     {isEn ? 'Very perceptive observation! If everything were as perfect as this simulation, analog AI chips would have already dominated the world. In reality, Prof. Choi\'s lab (specializing in hardware components) and materials scientists struggle with extremely harsh physical limits:' : 'Bạn nhận xét rất tinh tế! Nếu mọi thứ hoàn hảo như mô phỏng này, AI chip analog đã thống trị thế giới. Thực tế, phòng lab của GS. Choi (chuyên về phần cứng linh kiện) và các nhà khoa học vật liệu phải vật lộn với các giới hạn vật lý cực kỳ khắc nghiệt:'}
                   </p>
                   <ul className="list-disc list-inside space-y-2 ml-1">
-                    <li><strong className="text-white">{isEn ? 'Code does not run "inside" the chip:' : 'Code không chạy "bên trong" chip:'}</strong> {isEn ? 'Memristor chip is just a physical resistor array. The Python code runs on your Host PC.' : 'Chip Memristor chỉ là một mảng lưới các điện trở vật lý. Code Python chạy trên máy tính (Host PC).'}</li>
-                    <li><strong className="text-white">{isEn ? 'No "Flashing" concept:' : 'Không có khái niệm "Đổ Code" (Flashing):'}</strong> {isEn ? 'No compiling/flashing. It uses API to send physical voltage pulses.' : 'Không compile/nạp code. Nó dùng API phát xung điện áp vật lý.'}</li>
-                    <li><strong className="text-white">{isEn ? 'Variables are Physical States:' : 'Biến số là Trạng thái Vật lý:'}</strong> {isEn ? 'Data is stored by changing component resistance.' : 'Lưu dữ liệu chính là thay đổi điện trở của linh kiện.'}</li>
-                    <li><strong className="text-white">{isEn ? 'Calculation by Ohm\'s Law:' : 'Phép tính bằng Định luật Ôm:'}</strong> {isEn ? 'I = V * G. Matrix addition is computed instantly via Kirchhoff\'s law.' : 'I = V * G. Phép cộng ma trận tính tức thời bằng định luật Kirchhoff.'}</li>
-                  </ul>
-                </div>
-              </div>
-
-              <div className="bg-[#2A1B1B] border border-rose-500/20 p-5 rounded-xl space-y-4">
-                <h4 className="text-sm font-bold text-rose-400 uppercase tracking-wider font-mono flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4" />
-                  {isEn ? 'Harsh Reality: Why isn\'t this technology widespread yet?' : 'Thực tế phũ phàng: Tại sao công nghệ này chưa phổ biến?'}
-                </h4>
-                <div className="space-y-3 text-[13px] text-elegant-text/90 leading-relaxed">
-                  <p>
-                    {isEn ? 'Very perceptive observation! If everything were as perfect as this simulation, analog AI chips would have already dominated the world. In reality, Prof. Choi\'s lab (specializing in hardware components) and materials scientists struggle with extremely harsh physical limits:' : 'Bạn nhận xét rất tinh tế! Nếu mọi thứ hoàn hảo như mô phỏng này, AI chip analog đã thống trị thế giới. Thực tế, phòng lab của GS. Choi (chuyên về phần cứng linh kiện) và các nhà khoa học vật liệu phải vật lộn với các giới hạn vật lý cực kỳ khắc nghiệt:'}
-                  </p>
-                  <ul className="list-disc list-inside space-y-2 ml-1">
                     <li>
                       <strong className="text-white">{isEn ? 'Variability & Noise:' : 'Độ biến thiên (Variability) & Nhiễu:'}</strong> {isEn ? 'No two memristors are 100% identical. With the same 1.5V programming pulse, point A might reach 100Ω while point B reaches 120Ω. Furthermore, over time these values drift.' : 'Không có 2 memristor nào giống nhau 100%. Cùng một xung điện áp nạp 1.5V, điện trở của điểm A có thể đạt 100Ω, nhưng điểm B lại ra 120Ω. Chưa kể theo thời gian, các giá trị này bị trôi (drift).'}
                     </li>
@@ -271,13 +264,40 @@ for epoch in range(10):
   );
 }
 
-// Hàm tô màu cú pháp đơn giản cho Python
-function highlightPython(code: string) {
-  return code
-    .replace(/#.*$/gm, '<span class="text-gray-500 italic">$&</span>')
-    .replace(/"(.*?)"/g, '<span class="text-emerald-400">"$&"</span>')
-    .replace(/'(.*?)'/g, '<span class="text-emerald-400">\'$&\'</span>')
-    .replace(/\b(import|from|def|for|in|if|else|return|class|print)\b/g, '<span class="text-pink-400 font-bold">$&</span>')
-    .replace(/\b(np|pyvisa|time|controller|rm|instrument|G_re_plus|G_re_minus|G_im_plus|G_im_minus|target_G)\b/g, '<span class="text-blue-400">$&</span>')
-    .replace(/\b(\d+\.?\d*)\b/g, '<span class="text-orange-400">$&</span>');
+// Single-pass Python highlighter: tokens are matched once on the RAW source,
+// every piece of text is HTML-escaped, so inserted <span> tags are never re-matched.
+const PY_KEYWORDS = new Set([
+  'import', 'from', 'as', 'def', 'class', 'return', 'for', 'while', 'in', 'if', 'elif', 'else',
+  'try', 'except', 'finally', 'with', 'lambda', 'pass', 'break', 'continue', 'raise', 'yield',
+  'and', 'or', 'not', 'is', 'None', 'True', 'False', 'print',
+]);
+const PY_KNOWN_NAMES = new Set([
+  'np', 'pyvisa', 'time', 'controller', 'rm', 'instrument',
+  'G_re_plus', 'G_re_minus', 'G_im_plus', 'G_im_minus', 'target_G',
+]);
+
+const PY_TOKEN_RE =
+  /(#[^\n]*)|("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')|\b([A-Za-z_]\w*)\b|\b(\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b/g;
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function highlightPython(code: string): string {
+  let out = '';
+  let last = 0;
+  for (const m of code.matchAll(PY_TOKEN_RE)) {
+    const start = m.index ?? 0;
+    const [token, comment, str, ident, num] = m;
+    out += escapeHtml(code.slice(last, start));
+    const esc = escapeHtml(token);
+    if (comment) out += `<span class="text-gray-500 italic">${esc}</span>`;
+    else if (str) out += `<span class="text-emerald-400">${esc}</span>`;
+    else if (ident && PY_KEYWORDS.has(ident)) out += `<span class="text-pink-400 font-bold">${esc}</span>`;
+    else if (ident && PY_KNOWN_NAMES.has(ident)) out += `<span class="text-blue-400">${esc}</span>`;
+    else if (num) out += `<span class="text-orange-400">${esc}</span>`;
+    else out += esc;
+    last = start + token.length;
+  }
+  return out + escapeHtml(code.slice(last));
 }

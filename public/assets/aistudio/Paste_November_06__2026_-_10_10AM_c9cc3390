@@ -1,0 +1,1139 @@
+## PROMPT 2 — Benchmark & số liệu hiển thị trung thực
+
+> **Tiền đề:** Prompt 1 đã được áp dụng. Đã có các API `ComplexLIFNeuron.step(re, im, track = true)` và `TSComplexSNN.forward(seq, record = true)`. `evaluateLoss(sample)` trả về `{ loss, predictions, firingRates, phaseCoherence, forward }`. File `src/utils/random.ts` export `mulberry32(seed)` và `hashSeed(...parts)`.
+> **Nguyên tắc chung cho Gemini:** mọi con số hiển thị phải là số **đo thật** hoặc ghi rõ là **ước lượng/N/A**. Hai bên của một phép so sánh chỉ được khác nhau đúng **một** biến, và biến đó phải được ghi trong nhãn. Không thêm sàn thời gian, không thêm hệ số "cho đẹp".
+>
+> **Kết quả đã kiểm chứng trước (Node 24, chạy với engine hiện tại):**
+> - Khi benchmark công bằng, Karatsuba 3M so với Standard 4M cho khoảng **0.98–0.99×**, tức là KHÔNG nhanh hơn trong JavaScript. Đây là kết quả đúng và phải được hiển thị như vậy.
+> - Bài test chỉ khác pha (iso-frequency) với hai mô hình đối chứng: CV-SNN đạt **100%**, SNN mù pha đạt **50%** (5 seed × 3 độ lệch pha, 60 bước train).
+
+---
+
+### 2.0 Hai thay đổi nhỏ trong engine để benchmark tái lập được — `src/simulationEngine.ts:267-275`, `:508`
+
+- **Vấn đề:**
+  - `generateSpectralSignal` luôn dùng `Math.random()`, nên không thể cho hai bên benchmark dùng cùng một dữ liệu seed.
+  - `trainStep` luôn ghi một sample vào `perfTracker`. Khi benchmark gọi nó hàng nghìn lần, telemetry bị ngập dữ liệu benchmark.
+- **Code hiện tại:**
+  ```ts
+  noiseLevel: number = 0.15
+  ): SignalSample {
+  ...
+  const cleanMag = 0.85 + (Math.random() - 0.5) * 0.15;
+  ...
+  trainStep(sample: SignalSample, learningRate: number): number {
+  ```
+- **Thay bằng:**
+  ```ts
+  export function generateSpectralSignal(
+    targetClass: number,
+    timeSteps: number,
+    inFeatures: number,
+    freq0: number = 1.0,
+    freq1: number = 4.5,
+    phaseShift: number = Math.PI / 2,
+    noiseLevel: number = 0.15,
+    rng: () => number = Math.random
+  ): SignalSample {
+  ```
+  Thay đúng 5 lần `Math.random()` trong thân hàm (cleanMag, noiseRe, noiseIm, clutterMag, clutterPhase) bằng `rng()`.
+
+  Với `trainStep`, nếu Prompt 1 chưa thêm thì thêm tham số `record`:
+  ```ts
+  trainStep(sample: SignalSample, learningRate: number, record: boolean = true): number {
+    ...
+    if (record) {
+      perfTracker.recordSample(
+        Math.max(0.05, performance.now() - t0),
+        bpttMacs,
+        totalSpikes,
+        bpttTensorBytes,
+        `BPTT.trainStep (${this.surrogateType})`
+      );
+    }
+    return loss;
+  }
+  ```
+  Bên trong `trainStep`, lời gọi forward phải là `this.forward(sample.inputSpikeSequence, false)`.
+- **Vì sao đây là cách tốt nhất:** tham số mặc định giữ nguyên hành vi cho mọi chỗ gọi cũ. Benchmark có được dữ liệu seed giống hệt cho hai bên mà không phải sao chép logic sinh tín hiệu.
+- **Kiểm tra:**
+  - Gọi `generateSpectralSignal(1, 30, 16, 1.2, 4.5, 1.2, 0.15, mulberry32(7))` hai lần phải cho hai mảng giống hệt nhau.
+  - `npm run lint` không lỗi.
+
+---
+
+### 2.1 Tạo bộ đo micro-benchmark chuẩn — file mới `src/utils/benchmark.ts`
+
+- **Vấn đề:**
+  - Code hiện tại đo mỗi trial **một lần**, rồi lấy **trung bình** của 6 trial.
+  - Timer trình duyệt chỉ có độ phân giải 0.005–0.1 ms (Chrome) hoặc tới 1 ms (Safari/Firefox). Một vòng lặp chạy 0.02 ms vì thế đo ra 0 hoặc 1 tick, nên kết quả chỉ là nhiễu.
+  - Trung bình bị GC pause kéo lệch.
+- **Code hiện tại:** (không có helper; mỗi nhánh tự `performance.now()` một lần)
+- **Thay bằng:** tạo file `src/utils/benchmark.ts` với nội dung dưới đây. Code này đã được chạy thử.
+  ```ts
+  // Micro-benchmark helpers: warm-up, auto-calibrated batch size, interleaved A/B samples, median.
+
+  export interface MeasureResult {
+    medianMs: number; // time per single call of fn
+    minMs: number;
+    maxMs: number;
+    iterations: number; // calls of fn per timed sample
+    samples: number;
+    belowResolution: boolean;
+  }
+
+  export interface CompareResult {
+    active: MeasureResult;
+    baseline: MeasureResult;
+    speedup: number | null; // baseline / active, null when either side is not measurable
+  }
+
+  export interface BenchmarkOptions {
+    warmup?: number;
+    samples?: number;
+    minSampleMs?: number;
+    maxIterations?: number;
+  }
+
+  // Accumulates every return value so the JIT cannot discard the benchmarked work as dead code.
+  let benchSink = 0;
+  export const readBenchSink = (): number => benchSink;
+
+  let cachedResolutionMs: number | null = null;
+
+  // Smallest observable step of performance.now() (≈0.005–0.1 ms in Chrome, up to 1 ms in Safari/Firefox).
+  export function getTimerResolutionMs(): number {
+    if (cachedResolutionMs !== null) return cachedResolutionMs;
+    let best = Infinity;
+    for (let k = 0; k < 10; k++) {
+      const a = performance.now();
+      let b = performance.now();
+      while (b === a) b = performance.now();
+      best = Math.min(best, b - a);
+    }
+    cachedResolutionMs = best;
+    return best;
+  }
+
+  function timeBatch(fn: () => number, iterations: number): number {
+    let acc = 0;
+    const t0 = performance.now();
+    for (let i = 0; i < iterations; i++) acc += fn();
+    const elapsed = performance.now() - t0;
+    benchSink += acc;
+    return elapsed;
+  }
+
+  // Doubles the batch size until one timed batch lasts at least minSampleMs.
+  function calibrate(fn: () => number, minSampleMs: number, maxIterations: number) {
+    let iterations = 1;
+    let batchMs = timeBatch(fn, iterations);
+    while (batchMs < minSampleMs && iterations < maxIterations) {
+      iterations *= 2;
+      batchMs = timeBatch(fn, iterations);
+    }
+    return { iterations, batchMs };
+  }
+
+  function summarize(perCallMs: number[], iterations: number, belowResolution: boolean): MeasureResult {
+    const sorted = [...perCallMs].sort((a, b) => a - b);
+    const mid = sorted.length >> 1;
+    const medianMs = sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    return {
+      medianMs,
+      minMs: sorted[0],
+      maxMs: sorted[sorted.length - 1],
+      iterations,
+      samples: sorted.length,
+      belowResolution,
+    };
+  }
+
+  export function compareBenchmarks(
+    active: () => number,
+    baseline: () => number,
+    options: BenchmarkOptions = {}
+  ): CompareResult {
+    const resolution = getTimerResolutionMs();
+    const warmup = options.warmup ?? 5;
+    const samples = options.samples ?? 7;
+    // ≥ 20 timer ticks per sample keeps quantization error ≤ 5 %
+    const minSampleMs = options.minSampleMs ?? Math.max(5, 20 * resolution);
+    const maxIterations = options.maxIterations ?? 1 << 20;
+
+    for (let i = 0; i < warmup; i++) {
+      benchSink += active();
+      benchSink += baseline();
+    }
+
+    const ca = calibrate(active, minSampleMs, maxIterations);
+    const cb = calibrate(baseline, minSampleMs, maxIterations);
+
+    // Interleave A/B samples so GC pauses and CPU frequency drift hit both sides equally
+    const activeMs: number[] = [];
+    const baselineMs: number[] = [];
+    for (let s = 0; s < samples; s++) {
+      activeMs.push(timeBatch(active, ca.iterations) / ca.iterations);
+      baselineMs.push(timeBatch(baseline, cb.iterations) / cb.iterations);
+    }
+
+    const a = summarize(activeMs, ca.iterations, ca.batchMs < 2 * resolution);
+    const b = summarize(baselineMs, cb.iterations, cb.batchMs < 2 * resolution);
+    const speedup =
+      a.belowResolution || b.belowResolution || a.medianMs <= 0 ? null : b.medianMs / a.medianMs;
+    return { active: a, baseline: b, speedup };
+  }
+  ```
+- **Vì sao đây là cách tốt nhất:** đây là quy trình chuẩn của các thư viện như benchmark.js và tinybench.
+  - Warm-up cho JIT tối ưu code trước khi đo.
+  - Tự tăng số vòng lặp để mỗi lần đo dài ít nhất 20 tick của timer, nên sai số lượng tử ≤ 5%.
+  - Lấy median để chống nhiễu từ GC.
+  - Đo xen kẽ A/B để GC và thay đổi xung nhịp CPU ảnh hưởng đều cả hai bên.
+  - Biến sink ngăn JIT loại bỏ code "không dùng".
+- **Kiểm tra:**
+  - `compareBenchmarks(() => 1, () => 1).speedup` trả về khoảng `0.9–1.1` hoặc `null`, không bao giờ là một số cố định như 1.33.
+  - Hàm có 4 export: `compareBenchmarks`, `getTimerResolutionMs`, `readBenchSink` và các type.
+
+---
+
+### 2.2 Viết lại `executeModuleBenchmark`: hai bên chỉ khác đúng biến trong nhãn — `src/components/PerformanceMonitor.tsx:203-496`
+
+- **Vấn đề:**
+  1. **Sàn thời gian bất đối xứng.** Bên active bị kẹp sàn thấp hơn baseline: `Math.max(0.03, …)` so với `Math.max(0.04, …)`, 0.05/0.07, 0.08/0.11, 0.08/0.12, 0.03/0.05, 0.15/0.22. Khi phép đo ra 0 (timer thô), "speedup" hiển thị đúng bằng tỷ lệ hai sàn (1.33×, 1.4×, 1.5×), tức là số bịa.
+  2. **Hai bên không làm cùng một việc:**
+     - `theory`: nhãn là "Karatsuba 3M vs 4M", nhưng active dùng surrogate `fast_sigmoid` còn baseline dùng `von_mises` cộng thêm atan2/cos/sin.
+     - `comparison`: active gọi `neuron.step` (kèm 2 lần `performance.now()` và ghi telemetry), còn baseline tính một hệ phương trình khác hẳn.
+     - `network`: baseline gọi thêm `evaluateLoss` (thêm một forward nữa), và hai mạng có trọng số random khác nhau.
+     - `vision`: baseline dùng trọng số khác (`cos(o*0.4)` so với hằng 0.5/0.25) và cách cộng dồn khác.
+     - `hardware`: baseline chỉ cộng các hằng số, không đọc dữ liệu.
+     - `pytorch`: đổi cùng lúc hai biến (surrogate và 3M/4M), lại thêm `evaluateLoss` thừa.
+  3. **Dòng 311 vô nghĩa:** `if (m + r.preResetMag > bPeak) bPeak = m;`. Vì `m === r.preResetMag`, điều kiện thực chất là `2m > bPeak`.
+  4. **Dòng 478-484 ghi số bịa vào telemetry:** MACs = `opsPerTrial * 4` và spikes = `opsPerTrial * 0.08`, cộng trùng với số engine đã ghi.
+  5. **Spec `pytorch` (dòng ~194-198) không khớp thứ được đo:** ghi `'128×128 Complex64'`, 16384 tham số, trong khi benchmark chạy mạng 16×2, T=30.
+- **Code hiện tại:**
+  ```ts
+  activeSamples.push(Math.max(0.03, performance.now() - t0 + (accRe > 1e9 ? 1 : 0)));
+  ...
+  baselineSamples.push(Math.max(0.04, performance.now() - b0 + (bRe > 1e9 ? 1 : 0)));
+  ...
+  if (m + r.preResetMag > bPeak) bPeak = m;
+  ...
+  perfTracker.recordSample(avgExecMs, opsPerTrial * 4, Math.round(opsPerTrial * 0.08), ...);
+  ```
+- **Thay bằng:**
+
+  **(a) Import** (đầu file):
+  ```ts
+  import { compareBenchmarks } from '../utils/benchmark';
+  import { mulberry32, hashSeed } from '../utils/random';
+  import {
+    perfTracker,
+    SimulationPerfSnapshot,
+    TSComplexSNN,
+    ComplexLIFNeuron,
+    generateSpectralSignal,
+    complex,
+    Complex,
+    computeSurrogateDerivative,
+  } from '../simulationEngine';
+  ```
+
+  **(b) Interface** (thay `ModuleBenchmarkResult`, dòng 61-74):
+  ```ts
+  export interface ModuleBenchmarkResult {
+    id: ActiveModelTabId;
+    code: string;
+    nameEn: string;
+    nameVi: string;
+    avgExecMs: number; // MEDIAN time per call (ms) of the active kernel
+    baselineMs: number; // baseline shown (custom or measured)
+    measuredBaselineMs: number; // median time per call of the measured baseline
+    minExecMs: number;
+    maxExecMs: number;
+    opsCount: number;
+    speedupRatio: number | null; // null = below timer resolution
+    deltaPercent: number | null; // negative = faster than baseline
+    activeBelowResolution: boolean;
+    baselineBelowResolution: boolean;
+    timestamp: number;
+  }
+  ```
+
+  **(c) Sửa nhãn trong `MODEL_SPECS`** cho đúng với thứ được đo. Các trường khác giữ nguyên.
+
+  | id | opDescEn / opDescVi | baselineDescEn / baselineDescVi |
+  |---|---|---|
+  | theory | `'2,500× Karatsuba 3M Complex Mul + Von Mises Surrogate'` / `'2.500× Nhân phức Karatsuba 3M + Surrogate Von Mises'` | `'Same loop, Standard 4M Complex Mul'` / `'Cùng vòng lặp, nhân phức chuẩn 4M'` |
+  | comparison | `'400-step cLIF recurrence in Cartesian form'` / `'400 bước cLIF dạng Descartes'` | `'Same recurrence in polar form (cos/sin/atan2 per step)'` / `'Cùng hệ thức dạng cực (cos/sin/atan2 mỗi bước)'` |
+  | neuron | `'20-Freq Resonance Sweep (T=100), recursive phasor input'` / `'Quét cộng hưởng 20 tần số (T=100), đầu vào phasor đệ quy'` | `'Same sweep, input via cos/sin per step'` / `'Cùng phép quét, đầu vào tính cos/sin mỗi bước'` |
+  | network | (giữ nguyên, chỉ bỏ "8×") `'16×2 Karatsuba CV-SNN Forward (T=30)'` / `'Lan truyền thuận CV-SNN 16×2 Karatsuba (T=30)'` | `'Same weights, Standard 4-MAC Forward (T=30)'` / `'Cùng trọng số, nhân chuẩn 4-MAC (T=30)'` |
+  | vision | `'64×4 Crossbar (T=15), precomputed phase LUT'` / `'Crossbar 64×4 (T=15), bảng tra pha tính trước'` | `'Same crossbar, atan2/cos/sin per pixel per step'` / `'Cùng crossbar, tính atan2/cos/sin từng pixel mỗi bước'` |
+  | hardware | `'1,200-cell differential ΔG tile, 1 complex MAC/cell (digital emulation)'` / `'Tile vi sai ΔG 1.200 ô, 1 MAC phức/ô (mô phỏng số)'` | `'4 single-ended arrays read separately + digital subtraction (emulation)'` / `'Đọc riêng 4 mảng đơn cực + trừ số (mô phỏng)'` |
+  | choi-lab | (giữ nguyên) | (giữ nguyên) |
+  | pytorch | `'Wirtinger BPTT trainStep, fast-sigmoid surrogate (16×2, T=30)'` / `'Một bước BPTT Wirtinger, surrogate fast-sigmoid (16×2, T=30)'` | `'Same trainStep, Von Mises surrogate'` / `'Cùng trainStep, surrogate Von Mises'` |
+
+  Với `pytorch`, sửa thêm các trường: `topology: '16×2 Complex (T=30)'`, `complexParams: 32`, `baseTensorKB: 5.9`, `timeSteps: 30`. Con số 5.9 KB lấy từ `bpttTensorBytes = (2·16·6 + 30·(16·2 + 2·6))·4 = 6048 B`.
+
+  **(d) Thay toàn bộ hàm `executeModuleBenchmark` (dòng 203-496)** bằng đoạn code dưới đây:
+  ```ts
+  interface BenchmarkPair {
+    active: () => number;
+    baseline: () => number;
+    opsPerCall: number;
+  }
+
+  /**
+   * Builds an (active, baseline) pair that does IDENTICAL work on IDENTICAL seeded inputs,
+   * differing only in the variable named in MODEL_SPECS[tabId].opDesc / baselineDesc.
+   * Each function returns a number that depends on all its work (consumed by the bench sink).
+   */
+  function buildBenchmarkPair(tabId: ActiveModelTabId): BenchmarkPair {
+    const rng = mulberry32(hashSeed(2026, ALL_TAB_IDS.indexOf(tabId)));
+
+    if (tabId === 'theory') {
+      const n = 2500;
+      const run = (mul: (a: Complex, b: Complex) => Complex) => () => {
+        let accRe = 0.4;
+        let accIm = -0.3;
+        for (let i = 0; i < n; i++) {
+          const [pRe, pIm] = mul([accRe, accIm], [0.98, 0.15]);
+          const surr = computeSurrogateDerivative(
+            Math.sqrt(pRe * pRe + pIm * pIm),
+            1.0,
+            'von_mises',
+            2.5
+          );
+          accRe = pRe * 0.99 + surr * 0.01;
+          accIm = pIm * 0.99 - surr * 0.01;
+        }
+        return accRe + accIm;
+      };
+      return { active: run(complex.mulKaratsuba), baseline: run(complex.mul), opsPerCall: n };
+    }
+
+    if (tabId === 'comparison') {
+      const n = 400;
+      const leakMag = 0.88;
+      const leakPhase = 0.25;
+      const threshold = 1.0;
+      const inRe = new Float64Array(n);
+      const inIm = new Float64Array(n);
+      for (let i = 0; i < n; i++) {
+        inRe[i] = (rng() - 0.5) * 0.7;
+        inIm[i] = (rng() - 0.5) * 0.7;
+      }
+      const neuron = new ComplexLIFNeuron(leakMag, leakPhase, threshold, 'soft');
+      return {
+        // Cartesian state u = beta*u + x, soft reset along the spike phase
+        active: () => {
+          neuron.reset();
+          let spikes = 0;
+          for (let i = 0; i < n; i++) {
+            if (neuron.step(inRe[i], inIm[i], false).spiked) spikes++;
+          }
+          return spikes;
+        },
+        // Identical recurrence kept in polar form, re-projected with cos/sin/atan2 every step
+        baseline: () => {
+          let mag = 0;
+          let ang = 0;
+          let spikes = 0;
+          for (let i = 0; i < n; i++) {
+            const re = leakMag * mag * Math.cos(ang + leakPhase) + inRe[i];
+            const im = leakMag * mag * Math.sin(ang + leakPhase) + inIm[i];
+            mag = Math.sqrt(re * re + im * im);
+            ang = Math.atan2(im, re);
+            if (mag >= threshold) {
+              spikes++;
+              mag -= threshold;
+            }
+          }
+          return spikes;
+        },
+        opsPerCall: n,
+      };
+    }
+
+    if (tabId === 'neuron') {
+      const freqs = 20;
+      const steps = 100;
+      const amp = 0.35;
+      const neuron = new ComplexLIFNeuron(0.92, 0.35, 1.1, 'soft');
+      return {
+        // Input phasor advanced by a precomputed unit rotation (1 complex mul per step)
+        active: () => {
+          let peak = 0;
+          for (let f = 1; f <= freqs; f++) {
+            neuron.reset();
+            const omega = (2 * Math.PI * f) / steps;
+            const cosW = Math.cos(omega);
+            const sinW = Math.sin(omega);
+            let xRe = amp;
+            let xIm = 0;
+            for (let t = 0; t < steps; t++) {
+              peak = Math.max(peak, neuron.step(xRe, xIm, false).preResetMag);
+              const nextRe = xRe * cosW - xIm * sinW;
+              xIm = xRe * sinW + xIm * cosW;
+              xRe = nextRe;
+            }
+          }
+          return peak;
+        },
+        // Same sweep, input synthesized with cos/sin at every step
+        baseline: () => {
+          let peak = 0;
+          for (let f = 1; f <= freqs; f++) {
+            neuron.reset();
+            for (let t = 0; t < steps; t++) {
+              const phase = (2 * Math.PI * f * t) / steps;
+              const r = neuron.step(amp * Math.cos(phase), amp * Math.sin(phase), false);
+              peak = Math.max(peak, r.preResetMag);
+            }
+          }
+          return peak;
+        },
+        opsPerCall: freqs * steps,
+      };
+    }
+
+    if (tabId === 'network') {
+      const sample = generateSpectralSignal(1, 30, 16, 1.2, 4.5, 1.2, 0.15, rng);
+      const netKaratsuba = new TSComplexSNN(16, 2, 0.85, 0.12, 1.0, 'soft', true, 'von_mises');
+      const netStandard = new TSComplexSNN(16, 2, 0.85, 0.12, 1.0, 'soft', false, 'von_mises');
+      // Same weights on both sides: only the 3M vs 4M synapse kernel differs
+      netStandard.weights = netKaratsuba.weights.map(w => w.slice());
+      const spikesOf = (net: TSComplexSNN) => () => {
+        const res = net.forward(sample.inputSpikeSequence, false);
+        return res.spikeCounts[0] + res.spikeCounts[1];
+      };
+      return { active: spikesOf(netKaratsuba), baseline: spikesOf(netStandard), opsPerCall: 30 * 16 * 2 };
+    }
+
+    if (tabId === 'vision') {
+      const steps = 15;
+      const outputs = 4;
+      const pixels = 64;
+      const cosLut = new Float64Array(pixels);
+      const sinLut = new Float64Array(pixels);
+      for (let idx = 0; idx < pixels; idx++) {
+        const ang = Math.atan2(Math.floor(idx / 8) - 3.5, (idx % 8) - 3.5);
+        cosLut[idx] = Math.cos(ang);
+        sinLut[idx] = Math.sin(ang);
+      }
+      const wRe = new Float64Array(outputs);
+      const wIm = new Float64Array(outputs);
+      for (let o = 0; o < outputs; o++) {
+        wRe[o] = Math.cos(o * 0.4);
+        wIm[o] = Math.sin(o * 0.4);
+      }
+      return {
+        // Precomputed spatial phase LUT, rotated by one temporal phasor per step
+        active: () => {
+          let acc = 0;
+          for (let t = 0; t < steps; t++) {
+            const cT = Math.cos(t * 0.3);
+            const sT = Math.sin(t * 0.3);
+            for (let o = 0; o < outputs; o++) {
+              let sumRe = 0;
+              let sumIm = 0;
+              for (let idx = 0; idx < pixels; idx++) {
+                const xRe = cosLut[idx] * cT - sinLut[idx] * sT;
+                const xIm = sinLut[idx] * cT + cosLut[idx] * sT;
+                sumRe += xRe * wRe[o] - xIm * wIm[o];
+                sumIm += xRe * wIm[o] + xIm * wRe[o];
+              }
+              acc += Math.sqrt(sumRe * sumRe + sumIm * sumIm);
+            }
+          }
+          return acc;
+        },
+        // Same crossbar and weights, spatial phase recomputed with atan2/cos/sin per pixel
+        baseline: () => {
+          let acc = 0;
+          for (let t = 0; t < steps; t++) {
+            for (let o = 0; o < outputs; o++) {
+              let sumRe = 0;
+              let sumIm = 0;
+              for (let idx = 0; idx < pixels; idx++) {
+                const ang = Math.atan2(Math.floor(idx / 8) - 3.5, (idx % 8) - 3.5) + t * 0.3;
+                const xRe = Math.cos(ang);
+                const xIm = Math.sin(ang);
+                sumRe += xRe * wRe[o] - xIm * wIm[o];
+                sumIm += xRe * wIm[o] + xIm * wRe[o];
+              }
+              acc += Math.sqrt(sumRe * sumRe + sumIm * sumIm);
+            }
+          }
+          return acc;
+        },
+        opsPerCall: steps * outputs * pixels,
+      };
+    }
+
+    if (tabId === 'hardware') {
+      const cells = 1200;
+      const vRe = 0.25;
+      const vIm = -0.18;
+      const gRePos = new Float64Array(cells);
+      const gReNeg = new Float64Array(cells);
+      const gImPos = new Float64Array(cells);
+      const gImNeg = new Float64Array(cells);
+      for (let i = 0; i < cells; i++) {
+        gRePos[i] = 20 + rng() * 20;
+        gReNeg[i] = 10 + rng() * 10;
+        gImPos[i] = 20 + rng() * 20;
+        gImNeg[i] = 10 + rng() * 10;
+      }
+      return {
+        // Differential tile: ΔG formed per cell, then one complex MAC
+        active: () => {
+          let iRe = 0;
+          let iIm = 0;
+          for (let i = 0; i < cells; i++) {
+            const dRe = gRePos[i] - gReNeg[i];
+            const dIm = gImPos[i] - gImNeg[i];
+            iRe += dRe * vRe - dIm * vIm;
+            iIm += dRe * vIm + dIm * vRe;
+          }
+          return iRe + iIm;
+        },
+        // Single-ended: 4 arrays read separately (8 partial currents), subtracted digitally
+        baseline: () => {
+          let iRe = 0;
+          let iIm = 0;
+          for (let i = 0; i < cells; i++) {
+            const a1 = gRePos[i] * vRe;
+            const a2 = gReNeg[i] * vRe;
+            const a3 = gImPos[i] * vIm;
+            const a4 = gImNeg[i] * vIm;
+            const b1 = gRePos[i] * vIm;
+            const b2 = gReNeg[i] * vIm;
+            const b3 = gImPos[i] * vRe;
+            const b4 = gImNeg[i] * vRe;
+            iRe += a1 - a2 - (a3 - a4);
+            iIm += b1 - b2 + (b3 - b4);
+          }
+          return iRe + iIm;
+        },
+        opsPerCall: cells,
+      };
+    }
+
+    if (tabId === 'choi-lab') {
+      const cells = 800;
+      const pulses = 4;
+      const targets = new Float64Array(cells);
+      const initial = new Float64Array(cells);
+      const pulseNoise = new Float64Array(cells * pulses);
+      for (let i = 0; i < cells; i++) {
+        targets[i] = 24 + rng() * 16;
+        initial[i] = targets[i] + (rng() - 0.5) * 4.8;
+        for (let p = 0; p < pulses; p++) pulseNoise[i * pulses + p] = (rng() - 0.5) * 0.3;
+      }
+      return {
+        // 1-step closed-loop linear calibration (same programming noise model as baseline)
+        active: () => {
+          let errSum = 0;
+          for (let i = 0; i < cells; i++) {
+            const g = initial[i] - 0.88 * (initial[i] - targets[i]) + pulseNoise[i * pulses];
+            errSum += Math.abs(g - targets[i]);
+          }
+          return errSum;
+        },
+        // 4-pulse iterative blind programming loop
+        baseline: () => {
+          let errSum = 0;
+          for (let i = 0; i < cells; i++) {
+            let g = initial[i];
+            for (let p = 0; p < pulses; p++) {
+              g -= 0.35 * (g - targets[i]) + pulseNoise[i * pulses + p];
+            }
+            errSum += Math.abs(g - targets[i]);
+          }
+          return errSum;
+        },
+        opsPerCall: cells,
+      };
+    }
+
+    // pytorch: one Wirtinger BPTT trainStep; only the surrogate differs
+    const sample = generateSpectralSignal(0, 30, 16, 1.0, 4.2, 1.3, 0.12, rng);
+    const netFast = new TSComplexSNN(16, 2, 0.85, 0.12, 1.0, 'soft', true, 'fast_sigmoid');
+    const netVonMises = new TSComplexSNN(16, 2, 0.85, 0.12, 1.0, 'soft', true, 'von_mises');
+    const initialWeights = netFast.weights.map(w => w.slice());
+    // Every call restarts from the same weights so each call does identical work
+    const trainOnce = (net: TSComplexSNN) => () => {
+      net.weights = initialWeights.map(w => w.slice());
+      return net.trainStep(sample, 0.02, false);
+    };
+    return { active: trainOnce(netFast), baseline: trainOnce(netVonMises), opsPerCall: 30 * 16 * 2 };
+  }
+
+  // Recomputes speedup/delta against a custom baseline (or the measured one when undefined)
+  function withBaseline(r: ModuleBenchmarkResult, customBaselineMs?: number): ModuleBenchmarkResult {
+    const baselineMs = customBaselineMs ?? r.measuredBaselineMs;
+    const measurable =
+      !r.activeBelowResolution && (customBaselineMs !== undefined || !r.baselineBelowResolution);
+    return {
+      ...r,
+      baselineMs,
+      speedupRatio: measurable ? baselineMs / r.avgExecMs : null,
+      deltaPercent: measurable ? ((r.avgExecMs - baselineMs) / baselineMs) * 100 : null,
+    };
+  }
+
+  /**
+   * Measures the active kernel of a module against its baseline with the calibrated,
+   * interleaved median benchmark. No floors, no synthetic telemetry.
+   */
+  function executeModuleBenchmark(
+    tabId: ActiveModelTabId,
+    customBaselineMap: Partial<Record<ActiveModelTabId, number>>
+  ): ModuleBenchmarkResult {
+    const spec = MODEL_SPECS[tabId];
+    const pair = buildBenchmarkPair(tabId);
+    const { active, baseline } = compareBenchmarks(pair.active, pair.baseline);
+    const measured: ModuleBenchmarkResult = {
+      id: tabId,
+      code: spec.code,
+      nameEn: spec.nameEn,
+      nameVi: spec.nameVi,
+      avgExecMs: active.medianMs,
+      baselineMs: baseline.medianMs,
+      measuredBaselineMs: baseline.medianMs,
+      minExecMs: active.minMs,
+      maxExecMs: active.maxMs,
+      opsCount: pair.opsPerCall,
+      speedupRatio: null,
+      deltaPercent: null,
+      activeBelowResolution: active.belowResolution,
+      baselineBelowResolution: baseline.belowResolution,
+      timestamp: Date.now(),
+    };
+    return withBaseline(measured, customBaselineMap[tabId]);
+  }
+  ```
+  Đoạn này **không** có `perfTracker.recordSample(...)` ở cuối. Lời gọi ở dòng 478-484 bị xóa hẳn.
+- **Vì sao đây là cách tốt nhất:**
+  - Mỗi cặp active/baseline chạy trên cùng dữ liệu seed, cùng trọng số, cùng số phép tính đầu ra. Vì vậy chênh lệch thời gian chỉ đến từ đúng biến ghi trong nhãn.
+  - `step(..., false)`, `forward(..., false)` và `trainStep(..., false)` loại bỏ chi phí `performance.now()`/telemetry ra khỏi thời gian đo.
+  - `withBaseline` là nguồn duy nhất tính speedup, nên lock baseline, reset và đo mới luôn nhất quán.
+- **Kiểm tra:**
+  - Kết quả hai bên phải giống nhau:
+    - `comparison`: `active()` và `baseline()` trả về cùng số spike (đã thử: 11 = 11).
+    - `network`: hai mạng cho cùng `spikeCounts` (đã thử: [13, 15] = [13, 15]).
+    - `vision` và `hardware`: hai bên lệch nhau < 1e-9.
+  - Speedup của `theory` và `network` hiển thị khoảng **0.95–1.05×**. Đây là kết quả đúng: trong JS, Karatsuba không nhanh hơn 4M.
+  - Tìm `Math.max(0.0` trong `PerformanceMonitor.tsx` phải không còn kết quả nào.
+
+---
+
+### 2.3 Hiển thị kết quả benchmark: đơn vị µs, "dưới độ phân giải timer", trung bình nhân — `PerformanceMonitor.tsx:725-736, 940-966, 1077-1098, 1125-1180, 1238-1251`
+
+- **Vấn đề:**
+  - Thời gian mỗi lần gọi giờ thường chỉ vài µs, nên `toFixed(2) ms` sẽ hiện `0.00`.
+  - `speedupRatio` và `deltaPercent` giờ có thể là `null`.
+  - Lúc mount chưa có kết quả (xem 2.6), nên `benchmarkResults[id]` có thể là `undefined`, và `res.avgExecMs` sẽ crash.
+  - Lấy "tổng ms" của 8 module có kích thước khác nhau rồi chia cho nhau là sai: module chậm nhất áp đảo kết quả. Chuẩn cho một suite benchmark là **trung bình nhân (geometric mean)** của các speedup.
+- **Code hiện tại:**
+  ```ts
+  const allResultsList = ALL_TAB_IDS.map(id => benchmarkResults[id]);
+  const maxChartMs = Math.max(0.5, ...allResultsList.map(r => Math.max(r.avgExecMs, r.baselineMs)));
+  ...
+  const suiteOverallSpeedup = suiteTotalBaselineMs / Math.max(0.001, suiteTotalActiveMs);
+  ...
+  {activeBenchResult.speedupRatio.toFixed(2)}× (
+  ```
+- **Thay bằng:**
+
+  Thêm hai helper ở cấp module, cạnh `formatCompactNumber` hoặc ngoài component:
+  ```ts
+  const formatMs = (ms: number): string =>
+    ms >= 1 ? `${ms.toFixed(2)} ms` : ms >= 0.001 ? `${(ms * 1000).toFixed(1)} µs` : `${(ms * 1e6).toFixed(0)} ns`;
+
+  const formatSpeedup = (r: ModuleBenchmarkResult, isEn: boolean): string =>
+    r.speedupRatio === null || r.deltaPercent === null
+      ? isEn
+        ? 'below timer resolution'
+        : 'dưới độ phân giải timer'
+      : `${r.speedupRatio.toFixed(2)}× (${r.deltaPercent > 0 ? '+' : ''}${r.deltaPercent.toFixed(1)}%)`;
+  ```
+
+  Thay khối dòng 725-736:
+  ```ts
+  // Aggregate suite statistics (geometric mean of per-module speedups)
+  const allResultsList = ALL_TAB_IDS.map(id => benchmarkResults[id]).filter(
+    (r): r is ModuleBenchmarkResult => r !== undefined
+  );
+  const maxChartMs = Math.max(
+    1e-6,
+    ...allResultsList.map(r => Math.max(r.avgExecMs, r.baselineMs))
+  );
+  const suiteTotalActiveMs = allResultsList.reduce((acc, r) => acc + r.avgExecMs, 0);
+  const suiteTotalBaselineMs = allResultsList.reduce((acc, r) => acc + r.baselineMs, 0);
+  const measurableSpeedups = allResultsList
+    .map(r => r.speedupRatio)
+    .filter((s): s is number => s !== null && s > 0);
+  const suiteOverallSpeedup =
+    measurableSpeedups.length > 0
+      ? Math.exp(measurableSpeedups.reduce((acc, s) => acc + Math.log(s), 0) / measurableSpeedups.length)
+      : null;
+  const suiteOverallDeltaPercent = suiteOverallSpeedup !== null ? (1 / suiteOverallSpeedup - 1) * 100 : null;
+  ```
+
+  Chỗ hiển thị suite (dòng ~1077, 1085, 1093-1098):
+  ```tsx
+  {formatMs(suiteTotalActiveMs)}
+  ...
+  {formatMs(suiteTotalBaselineMs)}
+  ...
+  <div
+    className={`text-xs font-bold mt-0.5 ${
+      (suiteOverallDeltaPercent ?? 0) <= 0 ? 'text-emerald-400' : 'text-amber-400'
+    }`}
+  >
+    {suiteOverallSpeedup === null || suiteOverallDeltaPercent === null
+      ? isEn ? 'below timer resolution' : 'dưới độ phân giải timer'
+      : `${suiteOverallSpeedup.toFixed(2)}× (${suiteOverallDeltaPercent > 0 ? '+' : ''}${suiteOverallDeltaPercent.toFixed(1)}%)`}
+  </div>
+  ```
+  Đổi nhãn `'Mean Speedup / Δ'` thành `'Geo-mean Speedup / Δ'` và `'Tăng Tốc Trung Bình'` thành `'Tăng Tốc TB Nhân'`. Đổi nhãn chart dòng 1108 `'Avg Execution Time vs Baseline (ms · Lower is Faster)'` thành `'Median Time per Call vs Baseline (Lower is Faster)'`, bản tiếng Việt tương ứng là `'Thời gian trung vị mỗi lần gọi so với chuẩn (thấp hơn là nhanh hơn)'`.
+
+  Thẻ module đang active (dòng 949-966):
+  ```tsx
+  {formatMs(activeBenchResult.avgExecMs)}{' '}
+  <span className="text-elegant-muted font-normal">
+    vs {formatMs(activeBenchResult.baselineMs)}
+  </span>
+  ...
+  <span
+    className={`text-[11px] font-bold ${
+      (activeBenchResult.deltaPercent ?? 0) <= 0 ? 'text-emerald-400' : 'text-amber-400'
+    }`}
+  >
+    {formatSpeedup(activeBenchResult, isEn)}
+  </span>
+  ```
+
+  Mỗi hàng của chart (dòng 1125 trở đi), ngay sau `const res = benchmarkResults[tabId];`:
+  ```tsx
+  if (!res) {
+    return (
+      <div key={tabId} className="p-1.5 rounded-md border bg-elegant-bg/40 border-slate-800/60 text-[10px] text-elegant-muted">
+        {MODEL_SPECS[tabId].code} · {isEn ? 'measuring…' : 'đang đo…'}
+      </div>
+    );
+  }
+  ```
+  Trong hàng đó còn cần sửa:
+  - `const isFaster = (res.deltaPercent ?? 0) <= 0;`
+  - `{res.avgExecMs.toFixed(2)}ms` → `{formatMs(res.avgExecMs)}`
+  - `/ {res.baselineMs.toFixed(2)}ms` → `/ {formatMs(res.baselineMs)}`
+  - Ô `%` (dòng 1177-1178):
+    ```tsx
+    {res.deltaPercent === null ? '—' : `${res.deltaPercent > 0 ? '+' : ''}${res.deltaPercent.toFixed(1)}%`}
+    ```
+
+  Thanh trạng thái thu gọn (dòng 1244-1250): đổi điều kiện thành `(activeBenchResult.deltaPercent ?? 0) <= 0`, và nội dung thành:
+  ```tsx
+  {activeBenchResult.speedupRatio === null ? (isEn ? 'timer res.' : 'dưới ngưỡng timer') : `${activeBenchResult.speedupRatio.toFixed(2)}× vs Base`}
+  ```
+- **Vì sao đây là cách tốt nhất:**
+  - Trung bình nhân là cách tổng hợp speedup chuẩn trong các suite như SPEC: không bị module chậm nhất chi phối, và đối xứng giữa nhanh hơn và chậm hơn.
+  - Hiển thị `null` thành chữ, thay vì để mặc định một con số, đảm bảo không bao giờ có số giả.
+- **Kiểm tra:**
+  - Mở panel benchmark ngay sau khi tải trang: các hàng hiện "đang đo…" rồi lần lượt có số, không crash.
+  - Không ô nào hiện `0.00ms`.
+  - Trên Safari, nếu một module quá nhanh, ô speedup hiện "dưới độ phân giải timer".
+
+---
+
+### 2.4 Heap: hiện "N/A" thay vì số bịa — `PerformanceMonitor.tsx:512-513, 580-603, 868, 993-1004, 1262`
+
+- **Vấn đề:**
+  - Trên Firefox và Safari không có `performance.memory`, nhưng UI vẫn hiện `16.2 + activeKB/64 + (totalCalls % 15) * 0.04` MB trên tổng `32` MB, với nhãn "Runtime Heap + Float32 Buffers". Phần nhiễu dao động theo `totalCalls % 15` là bịa hoàn toàn.
+  - Giá trị khởi tạo `18.4` và `36.0` cũng là bịa.
+- **Code hiện tại:**
+  ```ts
+  const [heapUsedMB, setHeapUsedMB] = useState<number>(18.4);
+  const [heapTotalMB, setHeapTotalMB] = useState<number>(36.0);
+  ...
+  setHeapUsedMB(16.2 + activeKB / 64 + (snap.totalCalls % 15) * 0.04);
+  setHeapTotalMB(32.0);
+  ```
+- **Thay bằng:**
+  ```ts
+  const [heapUsedMB, setHeapUsedMB] = useState<number | null>(null);
+  const [heapTotalMB, setHeapTotalMB] = useState<number | null>(null);
+  ```
+  Nhánh `else` trong rAF loop (dòng ~596-600):
+  ```ts
+  } else {
+    // performance.memory is Chrome-only; never synthesize a value
+    setHasNativeMemoryApi(false);
+    setHeapUsedMB(null);
+    setHeapTotalMB(null);
+  }
+  ```
+  Nhánh này không còn dùng `activeTab`, nên đổi deps của effect rAF (dòng ~615) từ `[activeTab]` thành `[]`. Như vậy loop đo FPS không bị khởi động lại mỗi lần đổi tab.
+
+  Các chỗ hiển thị:
+  ```tsx
+  // dòng 868
+  Heap {heapUsedMB !== null ? `${heapUsedMB.toFixed(1)} MB` : 'N/A'}
+  // dòng 993-1004
+  <span>
+    {hasNativeMemoryApi
+      ? isEn ? 'V8 JS Heap (Used / Total):' : 'Bộ nhớ V8 JS Heap:'
+      : isEn ? 'JS Heap (not exposed by this browser):' : 'JS Heap (trình duyệt không cung cấp):'}
+  </span>
+  <span className="text-indigo-400">
+    {heapUsedMB !== null && heapTotalMB !== null
+      ? `${heapUsedMB.toFixed(1)} / ${heapTotalMB.toFixed(0)} MB`
+      : 'N/A'}
+  </span>
+  // dòng 1262
+  {activeTensorKB.toFixed(1)} KB / {heapUsedMB !== null ? `${heapUsedMB.toFixed(1)} MB` : 'heap N/A'}
+  ```
+- **Vì sao đây là cách tốt nhất:** không có API nào khác cho biết dung lượng heap trên Firefox/Safari, trừ `measureUserAgentSpecificMemory`, mà API này đòi cross-origin isolation và chạy bất đồng bộ. Vì vậy "N/A" là câu trả lời trung thực duy nhất.
+- **Kiểm tra:**
+  - Trên Firefox/Safari, ô heap hiện "N/A" và không dao động.
+  - Trên Chrome vẫn hiện số thật.
+  - Đổi tab không làm FPS nhảy về 60.
+
+---
+
+### 2.5 Xóa mẫu "init" giả khi đổi tab — `PerformanceMonitor.tsx:544-565`
+
+- **Vấn đề:** mỗi lần đổi tab, effect `[activeTab]` lại:
+  - chạy một vòng lặp 256 lần không liên quan đến module;
+  - ghi vào telemetry các số MACs = `complexParams * timeSteps * 3` và spikes = `timeSteps * 0.25`, đều là số suy ra chứ không đo;
+  - có biểu thức vô nghĩa `accRe === 999999 ? 0 : 0`.
+- **Code hiện tại:**
+  ```ts
+  // Trigger a lightweight baseline computation when switching tabs so telemetry reflects the active model
+  useEffect(() => {
+    const t0 = performance.now();
+    ...
+    const elapsed = Math.max(0.03, performance.now() - t0 + (accRe === 999999 ? 0 : 0));
+    perfTracker.recordSample(elapsed, spec.complexParams * spec.timeSteps * 3, ...);
+    setSimSnap(perfTracker.getSnapshot());
+  }, [activeTab]);
+  ```
+- **Thay bằng:** xóa toàn bộ effect này. Không cần code thay thế vì rAF loop đã gọi `setSimSnap(perfTracker.getSnapshot())` mỗi 500 ms.
+- **Vì sao đây là cách tốt nhất:** telemetry chỉ nên phản ánh công việc mô phỏng thật mà các tab thực sự chạy.
+- **Kiểm tra:**
+  - Đổi qua lại giữa các tab khi không chạy mô phỏng: `totalMacs` và `totalSpikes` đứng yên.
+  - Tìm `.init` trong file phải không còn kết quả nào.
+
+---
+
+### 2.6 Không chạy benchmark đồng bộ khi mount; chạy nền, hủy được, đọc baseline mới nhất — `PerformanceMonitor.tsx:518-528, 618-659`
+
+- **Vấn đề:**
+  1. Lazy initializer của `useState` chạy cả 8 benchmark đồng bộ ngay trong lần render đầu, nên chặn first paint. Dưới `<StrictMode>` (`main.tsx`) initializer còn chạy 2 lần.
+  2. Chuỗi `setTimeout` trong `handleRunAllModulesSuite` và `requestAnimationFrame` trong `handleBenchmarkActiveModule` không bị hủy khi unmount.
+  3. Các hàm này đọc `customBaselines` từ closure của lần render lúc bấm nút. Nếu người dùng bấm "Set Baseline" trong lúc suite đang chạy, các module còn lại vẫn dùng baseline cũ.
+- **Code hiện tại:**
+  ```ts
+  const [benchmarkResults, setBenchmarkResults] = useState<Record<ActiveModelTabId, ModuleBenchmarkResult>>(() => {
+    const initial = {} as Record<ActiveModelTabId, ModuleBenchmarkResult>;
+    ALL_TAB_IDS.forEach(id => { initial[id] = executeModuleBenchmark(id, {}); });
+    return initial;
+  });
+  ...
+  setTimeout(() => { const res = executeModuleBenchmark(tabId, customBaselines); ... }, 35);
+  ```
+- **Thay bằng:**
+  ```ts
+  const [benchmarkResults, setBenchmarkResults] = useState<
+    Partial<Record<ActiveModelTabId, ModuleBenchmarkResult>>
+  >({});
+  const [customBaselines, setCustomBaselines] = useState<
+    Partial<Record<ActiveModelTabId, number>>
+  >({});
+  const customBaselinesRef = useRef(customBaselines);
+  const benchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    customBaselinesRef.current = customBaselines;
+  }, [customBaselines]);
+
+  const cancelBenchmarkQueue = () => {
+    if (benchTimerRef.current !== null) {
+      clearTimeout(benchTimerRef.current);
+      benchTimerRef.current = null;
+    }
+  };
+
+  // Runs one module per macrotask so the browser can paint between modules
+  const runBenchmarkQueue = (ids: ActiveModelTabId[], onDone?: () => void) => {
+    cancelBenchmarkQueue();
+    let idx = 0;
+    const stepNext = () => {
+      if (idx >= ids.length) {
+        benchTimerRef.current = null;
+        setRunningModuleId(null);
+        setSimSnap(perfTracker.getSnapshot());
+        onDone?.();
+        return;
+      }
+      const tabId = ids[idx];
+      setRunningModuleId(tabId);
+      benchTimerRef.current = setTimeout(() => {
+        const res = executeModuleBenchmark(tabId, customBaselinesRef.current);
+        setBenchmarkResults(prev => ({ ...prev, [tabId]: res }));
+        idx += 1;
+        stepNext();
+      }, 16);
+    };
+    stepNext();
+  };
+
+  // Initial measurement after first paint; cancelled on unmount (and on StrictMode re-mount)
+  useEffect(() => {
+    runBenchmarkQueue(ALL_TAB_IDS);
+    return () => {
+      cancelBenchmarkQueue();
+      if (toastTimerRef.current !== null) clearTimeout(toastTimerRef.current);
+    };
+  }, []);
+
+  const handleBenchmarkActiveModule = () => {
+    if (runningModuleId !== null || isRunningSuite) return;
+    runBenchmarkQueue([activeTab]);
+  };
+
+  const handleRunAllModulesSuite = () => {
+    if (runningModuleId !== null || isRunningSuite) return;
+    setIsRunningSuite(true);
+    setMonitorMode('benchmark');
+    runBenchmarkQueue(ALL_TAB_IDS, () => setIsRunningSuite(false));
+  };
+
+  const handleLockCurrentAsBaseline = () => {
+    const nextBaselines: Partial<Record<ActiveModelTabId, number>> = {};
+    ALL_TAB_IDS.forEach(id => {
+      const r = benchmarkResults[id];
+      if (r) nextBaselines[id] = r.avgExecMs;
+    });
+    setCustomBaselines(nextBaselines);
+    customBaselinesRef.current = nextBaselines;
+    setBenchmarkResults(prev => {
+      const updated: Partial<Record<ActiveModelTabId, ModuleBenchmarkResult>> = {};
+      ALL_TAB_IDS.forEach(id => {
+        const r = prev[id];
+        if (r) updated[id] = withBaseline(r, nextBaselines[id]);
+      });
+      return updated;
+    });
+    setSavedBaselineToast(true);
+    if (toastTimerRef.current !== null) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setSavedBaselineToast(false), 1800);
+  };
+  ```
+  Nút "Benchmark active module" (dòng ~1020): `disabled={runningModuleId !== null || isRunningSuite}`.
+
+  `activeBenchResult` (dòng 541) giữ nguyên `benchmarkResults[activeTab]`. Kiểu của nó giờ là `ModuleBenchmarkResult | undefined`, và các chỗ dùng đều đã có `activeBenchResult && …`.
+- **Vì sao đây là cách tốt nhất:**
+  - Trang hiển thị ngay, mỗi module đo trong một macrotask riêng và giữa các module trình duyệt kịp vẽ lại.
+  - Mọi timer được giữ trong ref và hủy trong cleanup, kể cả trường hợp StrictMode mount → unmount → mount.
+  - Đọc baseline qua ref luôn lấy giá trị mới nhất mà không phải tạo lại callback.
+- **Kiểm tra:**
+  - Tải trang: giao diện hiện ngay, panel lần lượt điền số.
+  - Mở React DevTools Profiler: lần render đầu không còn dài hàng trăm ms.
+  - Chuyển trang hoặc unmount giữa chừng: console không có warning setState sau unmount.
+  - Bấm "Set Baseline" khi suite đang chạy: các module đo sau dùng baseline mới.
+
+---
+
+### 2.7 "Reset telemetry" phải thật sự reset — `PerformanceMonitor.tsx:688-697`
+
+- **Vấn đề:** `handleResetTelemetry` gọi `perfTracker.resetPeak()` rồi lập tức chạy lại đồng bộ 8 benchmark. Tổng MACs/spikes vì thế không bao giờ về 0, và UI bị treo vài trăm ms.
+- **Code hiện tại:**
+  ```ts
+  const handleResetTelemetry = () => {
+    perfTracker.resetPeak();
+    setCustomBaselines({});
+    const fresh = {} as Record<ActiveModelTabId, ModuleBenchmarkResult>;
+    ALL_TAB_IDS.forEach(id => { fresh[id] = executeModuleBenchmark(id, {}); });
+    setBenchmarkResults(fresh);
+    setSimSnap(perfTracker.getSnapshot());
+  };
+  ```
+- **Thay bằng:**
+  ```ts
+  const handleResetTelemetry = () => {
+    perfTracker.resetPeak();
+    setCustomBaselines({});
+    customBaselinesRef.current = {};
+    // Restore measured baselines; re-measuring is an explicit user action ("Run suite")
+    setBenchmarkResults(prev => {
+      const restored: Partial<Record<ActiveModelTabId, ModuleBenchmarkResult>> = {};
+      ALL_TAB_IDS.forEach(id => {
+        const r = prev[id];
+        if (r) restored[id] = withBaseline(r);
+      });
+      return restored;
+    });
+    setSimSnap(perfTracker.getSnapshot());
+  };
+  ```
+- **Vì sao đây là cách tốt nhất:** "reset" và "đo lại" là hai hành động khác nhau. Gộp chúng làm người dùng không bao giờ thấy được trạng thái 0. `withBaseline(r)` khôi phục baseline đo được mà không phải đo lại.
+- **Kiểm tra:** bấm Reset khi không có mô phỏng chạy: MACs = 0, spikes = 0, calls = 0. Các hàng benchmark trở về speedup so với baseline đo được.
+
+---
+
+### 2.8 Bài test "chỉ khác pha": thí nghiệm đối chứng thật thay cho heuristic viết tay — `src/components/NetworkTab.tsx:27-35, 214-307, 1088-1108`
+
+- **Vấn đề:**
+  - Hai dòng "CV-SNN (2D Phasor)" và "Real SNN (1D Rate)" **không hề dùng mạng nơ-ron nào**:
+    - CV-SNN được chấm bằng `vecSumMag < 0.55`, tức là tổng vector của 12 kênh do người viết tự đặt ngưỡng.
+    - Real SNN được chấm bằng `scalarSumMag > 0.85`, mà 0.85 lại đúng bằng trung bình `cleanMag`, nên ra khoảng 50% do chính cách đặt ngưỡng.
+  - Vì vậy đây là so sánh hai công thức, không phải hai mô hình.
+  - Lấy mạng chính so với một baseline chưa train cũng không công bằng, vì mạng chính đã được train hàng trăm bước.
+- **Code hiện tại:**
+  ```ts
+  const complexPhasePred = vecSumMag < 0.55 ? 1 : 0;
+  if (complexPhasePred === target) phaseOnlyComplexCorrect++;
+  const realPhasePred = scalarSumMag > 0.85 ? 1 : 0;
+  if (realPhasePred === target) phaseOnlyRealCorrect++;
+  ```
+- **Thay bằng:**
+
+  **(a) Interface** (dòng 27-35):
+  ```ts
+  interface BenchmarkResult {
+    cleanAccComplex: number;
+    noisyAccComplex: number;
+    phaseOnlyAccComplex: number; // fresh CV-SNN trained on the iso-frequency task
+    phaseOnlyAccBlind: number; // identical model/training, phase removed from input (|x| only)
+    phaseOnlyAccMain: number; // the user's trained network evaluated on the same task
+    confusionMatrix: [[number, number], [number, number]];
+    macSavedPercent: number;
+    totalMacs: number;
+  }
+  ```
+
+  **(b) Helper ở cấp module** (đặt trên `export default function NetworkTab()`; import thêm `SignalSample` vốn đã có):
+  ```ts
+  const ISO_TRAIN_STEPS = 60;
+
+  // Phase-blind control input: |x| in the real part, imaginary part 0 (all phase information removed)
+  const toPhaseBlind = (s: SignalSample): SignalSample => ({
+    ...s,
+    inputSpikeSequence: s.inputSpikeSequence.map(step => {
+      const out = new Float32Array(step.length);
+      for (let i = 0; i < step.length / 2; i++) {
+        out[i * 2] = Math.hypot(step[i * 2], step[i * 2 + 1]);
+      }
+      return out;
+    }),
+  });
+
+  const predictClass = (probs: number[]): number => (probs[1] > probs[0] ? 1 : 0);
+  ```
+
+  **(c) Trong `runVerificationBenchmark`:**
+
+  Ngay sau phần khai báo biến đếm, thay `let phaseOnlyRealCorrect = 0;` bằng:
+  ```ts
+  let phaseOnlyBlindCorrect = 0;
+  let phaseOnlyMainCorrect = 0;
+
+  // 3. Iso-frequency phase test as a controlled experiment: two fresh models with identical
+  // initial weights, hyper-parameters, samples and training steps; only the input differs
+  // (complex x vs phase-blind |x|).
+  const isoShift = Math.max(0.8, class1PhaseShift);
+  const makeIsoSample = (cls: number) =>
+    generateSpectralSignal(cls, 30, 16, class0Freq, class0Freq, isoShift, 0.1);
+  const isoComplexNet = new TSComplexSNN(16, 2, netLeakMag, netLeakPhase, netThreshold, netResetMode, useKaratsuba, surrogateType);
+  const isoBlindNet = new TSComplexSNN(16, 2, netLeakMag, netLeakPhase, netThreshold, netResetMode, useKaratsuba, surrogateType);
+  isoBlindNet.weights = isoComplexNet.weights.map(w => w.slice());
+  for (let k = 0; k < ISO_TRAIN_STEPS; k++) {
+    const s = makeIsoSample(k % 2);
+    isoComplexNet.trainStep(s, learningRate, false);
+    isoBlindNet.trainStep(toPhaseBlind(s), learningRate, false);
+  }
+  ```
+  Trong vòng `for (let k = 0; k < trials; k++)`, thay toàn bộ khối từ `const sPhase = generateSpectralSignal(` đến hết `if (realPhasePred === target) phaseOnlyRealCorrect++;` bằng:
+  ```ts
+  // Held-out iso-frequency sample, scored by real model predictions only
+  const sPhase = makeIsoSample(target);
+  if (predictClass(isoComplexNet.evaluateLoss(sPhase).predictions) === target) phaseOnlyComplexCorrect++;
+  if (predictClass(isoBlindNet.evaluateLoss(toPhaseBlind(sPhase)).predictions) === target) phaseOnlyBlindCorrect++;
+  if (predictClass(network.evaluateLoss(sPhase).predictions) === target) phaseOnlyMainCorrect++;
+  ```
+  Trong `setBenchmark({...})`:
+  ```ts
+  phaseOnlyAccComplex: (phaseOnlyComplexCorrect / trials) * 100,
+  phaseOnlyAccBlind: (phaseOnlyBlindCorrect / trials) * 100,
+  phaseOnlyAccMain: (phaseOnlyMainCorrect / trials) * 100,
+  ```
+
+  **(d) Hiển thị** (thay hai `div` dòng 1096-1107):
+  ```tsx
+  <div className="flex justify-between text-[11px]">
+    <span className="text-elegant-cyan">{isEn ? 'CV-SNN (complex input):' : 'CV-SNN (đầu vào phức):'}</span>
+    <span className="font-bold text-emerald-400">{benchmark.phaseOnlyAccComplex.toFixed(1)}%</span>
+  </div>
+  <div className="flex justify-between text-[11px]">
+    <span className="text-rose-400">{isEn ? 'Phase-blind SNN (|x| only):' : 'SNN mù pha (chỉ |x|):'}</span>
+    <span className="font-bold text-rose-400">{benchmark.phaseOnlyAccBlind.toFixed(1)}%</span>
+  </div>
+  <div className="flex justify-between text-[11px]">
+    <span className="text-elegant-muted">{isEn ? 'Your trained network on this test:' : 'Mạng bạn đã train trên bài này:'}</span>
+    <span className="font-bold text-white">{benchmark.phaseOnlyAccMain.toFixed(1)}%</span>
+  </div>
+  <div className="text-[9px] text-elegant-muted">
+    {isEn
+      ? `Control models: same initial weights, hyper-parameters and ${ISO_TRAIN_STEPS} training samples; only input phase differs. Chance = 50%.`
+      : `Mô hình đối chứng: cùng trọng số khởi tạo, siêu tham số và ${ISO_TRAIN_STEPS} mẫu huấn luyện; chỉ khác có/không có pha. Đoán ngẫu nhiên = 50%.`}
+  </div>
+  ```
+- **Vì sao đây là cách tốt nhất:**
+  - Đây là thiết kế ablation chuẩn: hai mô hình giống hệt nhau về kiến trúc, trọng số khởi tạo, dữ liệu và số bước train, và chỉ khác đúng một yếu tố là thông tin pha. Chênh lệch độ chính xác vì vậy được quy hoàn toàn cho pha.
+  - Mô hình mù pha được train chứ không phải một ngưỡng bịa.
+  - Dòng thứ ba cho thấy mạng mà người dùng đã train có tổng quát hóa được sang bài toán này hay không.
+  - Chi phí rất nhỏ: 120 lần `trainStep` cho mạng 16×2, chỉ vài chục ms.
+- **Kiểm tra:**
+  - Bấm "Run Verification": CV-SNN đạt khoảng **≥ 95%** (đã thử: 100% ở Δφ = 0.8 / 1.57 / 3.0), còn SNN mù pha đạt khoảng **50% ± 15%** (đã thử: 50%).
+  - Tìm `vecSumMag` và `scalarSumMag` trong file phải không còn kết quả nào.
+  - Dòng thứ ba hiện số thật. Mạng chính sau khoảng 300 bước train đạt 100% trong thử nghiệm.
+
+---
+
+### 2.9 Bỏ kiểu `NodeJS.Timeout` trong code trình duyệt — `src/components/SNNComparison.tsx:28`
+
+- **Vấn đề:** `NodeJS.Timeout` là type của Node, chỉ compile được khi `@types/node` được nạp vào context của code trình duyệt. Trong trình duyệt, `setInterval` trả về `number`.
+  - `interval` được khai báo mà không khởi tạo, rồi dùng trong cleanup khi `isAutoPlay === false`.
+  - Nếu sau này bật `strict`, đây sẽ là lỗi "used before assigned".
+- **Code hiện tại:**
+  ```ts
+  let interval: NodeJS.Timeout;
+  if (isAutoPlay) {
+    interval = setInterval(() => { ... }, 500);
+  }
+  return () => clearInterval(interval);
+  ```
+- **Thay bằng:**
+  ```ts
+  useEffect(() => {
+    if (!isAutoPlay) return;
+    const interval: ReturnType<typeof setInterval> = setInterval(() => {
+      setCurrentStep(prev => (prev + 1) % (simSteps + 1));
+    }, 500);
+    return () => clearInterval(interval);
+  }, [isAutoPlay, simSteps]);
+  ```
+- **Vì sao đây là cách tốt nhất:**
+  - `ReturnType<typeof setInterval>` đúng cho cả môi trường DOM lẫn Node.
+  - Return sớm khi không autoplay giúp loại bỏ biến chưa khởi tạo.
+- **Kiểm tra:**
+  - `npm run lint` không lỗi, kể cả khi tạm bật `"strict": true`.
+  - Tìm `NodeJS.` trong `src/` phải không còn kết quả nào.
+
+---
+
+**Sau khi sửa xong, Gemini liệt kê từng mục 2.0–2.9 kèm file:dòng đã thay đổi, và xác nhận `npm run lint` không lỗi.**

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { motion } from 'motion/react';
 import {
   Activity,
@@ -27,12 +27,29 @@ import {
 interface BenchmarkResult {
   cleanAccComplex: number;
   noisyAccComplex: number;
-  phaseOnlyAccComplex: number;
-  phaseOnlyAccReal: number;
-  confusionMatrix: [[number, number], [number, number]]; // [[TP0, FP1], [FN0, TP1]]
+  phaseOnlyAccComplex: number; // fresh CV-SNN trained on the iso-frequency task
+  phaseOnlyAccBlind: number; // identical model/training, phase removed from input (|x| only)
+  phaseOnlyAccMain: number; // the user's trained network evaluated on the same task
+  confusionMatrix: [[number, number], [number, number]]; // cm[target][pred], Class 1 = positive: [[TN, FP], [FN, TP]]
   macSavedPercent: number;
   totalMacs: number;
 }
+
+const ISO_TRAIN_STEPS = 60;
+
+// Phase-blind control input: |x| in the real part, imaginary part 0 (all phase information removed)
+const toPhaseBlind = (s: SignalSample): SignalSample => ({
+  ...s,
+  inputSpikeSequence: s.inputSpikeSequence.map(step => {
+    const out = new Float32Array(step.length);
+    for (let i = 0; i < step.length / 2; i++) {
+      out[i * 2] = Math.hypot(step[i * 2], step[i * 2 + 1]);
+    }
+    return out;
+  }),
+});
+
+const predictClass = (probs: number[]): number => (probs[1] > probs[0] ? 1 : 0);
 
 export default function NetworkTab() {
   const { language } = useLanguage();
@@ -98,9 +115,8 @@ export default function NetworkTab() {
       signalNoise
     );
     setCurrentSample(sample);
-    const outs = net.forward(sample.inputSpikeSequence);
     const evalRes = net.evaluateLoss(sample);
-    setSampleOutputs(outs);
+    setSampleOutputs(evalRes.forward);
     setSampleProbs(evalRes.predictions);
     setWeightVersion(v => v + 1);
   };
@@ -122,7 +138,9 @@ export default function NetworkTab() {
       network.useKaratsuba = useKaratsuba;
       network.surrogateType = surrogateType;
       if (currentSample) {
-        setSampleOutputs(network.forward(currentSample.inputSpikeSequence));
+        const evalRes = network.evaluateLoss(currentSample);
+        setSampleOutputs(evalRes.forward);
+        setSampleProbs(evalRes.predictions);
       }
     }
   }, [useKaratsuba, surrogateType]);
@@ -177,7 +195,6 @@ export default function NetworkTab() {
       const acc = correct / valSize;
 
       const displaySample = Math.random() > 0.5 ? s1 : s0;
-      const currentForward = network.forward(displaySample.inputSpikeSequence);
       const currentEval = network.evaluateLoss(displaySample);
 
       setEpoch(prev => prev + 1);
@@ -192,9 +209,9 @@ export default function NetworkTab() {
         return next;
       });
       setCurrentLoss(avgBatchLoss);
-      setTrainAccuracy(prevAcc => parseFloat((prevAcc * 0.7 + acc * 0.3).toFixed(2)));
+      setTrainAccuracy(prevAcc => prevAcc * 0.7 + acc * 0.3);
       setCurrentSample(displaySample);
-      setSampleOutputs(currentForward);
+      setSampleOutputs(currentEval.forward);
       setSampleProbs(currentEval.predictions);
       setWeightVersion(v => v + 1);
     }, 140);
@@ -217,7 +234,24 @@ export default function NetworkTab() {
     let cleanCorrect = 0;
     let noisyCorrect = 0;
     let phaseOnlyComplexCorrect = 0;
-    let phaseOnlyRealCorrect = 0;
+    let phaseOnlyBlindCorrect = 0;
+    let phaseOnlyMainCorrect = 0;
+
+    // 3. Iso-frequency phase test as a controlled experiment: two fresh models with identical
+    // initial weights, hyper-parameters, samples and training steps; only the input differs
+    // (complex x vs phase-blind |x|).
+    const isoShift = Math.max(0.8, class1PhaseShift);
+    const makeIsoSample = (cls: number) =>
+      generateSpectralSignal(cls, 30, 16, class0Freq, class0Freq, isoShift, 0.1);
+    const isoComplexNet = new TSComplexSNN(16, 2, netLeakMag, netLeakPhase, netThreshold, netResetMode, useKaratsuba, surrogateType);
+    const isoBlindNet = new TSComplexSNN(16, 2, netLeakMag, netLeakPhase, netThreshold, netResetMode, useKaratsuba, surrogateType);
+    isoBlindNet.weights = isoComplexNet.weights.map(w => w.slice());
+    for (let k = 0; k < ISO_TRAIN_STEPS; k++) {
+      const s = makeIsoSample(k % 2);
+      isoComplexNet.trainStep(s, learningRate, false);
+      isoBlindNet.trainStep(toPhaseBlind(s), learningRate, false);
+    }
+
     const cm: [[number, number], [number, number]] = [
       [0, 0],
       [0, 0],
@@ -254,45 +288,11 @@ export default function NetworkTab() {
       const predNoisy = resNoisy.predictions[1] > resNoisy.predictions[0] ? 1 : 0;
       if (predNoisy === target) noisyCorrect++;
 
-      // 3. Iso-frequency phase discrimination test:
-      // Both classes have identical carrier frequency, differing ONLY by spatial phase shift!
-      // A 1D real rate-coded SNN sees identical channel magnitudes, whereas CV-SNN detects phase coherence.
-      const sPhase = generateSpectralSignal(
-        target,
-        30,
-        16,
-        class0Freq,
-        class0Freq,
-        Math.max(0.8, class1PhaseShift),
-        0.1
-      );
-      // Measure coherent vector sum across channels (CV-SNN phase detector vs 1D scalar sum)
-      let vecSumMag = 0;
-      let scalarSumMag = 0;
-      for (let t = 0; t < 30; t++) {
-        let re = 0;
-        let im = 0;
-        let sc = 0;
-        for (let c = 0; c < 12; c++) {
-          const xr = sPhase.inputSpikeSequence[t][c * 2];
-          const xi = sPhase.inputSpikeSequence[t][c * 2 + 1];
-          re += xr;
-          im += xi;
-          sc += Math.sqrt(xr * xr + xi * xi);
-        }
-        vecSumMag += Math.sqrt(re * re + im * im) / 12;
-        scalarSumMag += sc / 12;
-      }
-      vecSumMag /= 30;
-      scalarSumMag /= 30;
-
-      // Coherent Class 0 has vecSumMag ~ 0.85; phase-shifted Class 1 cancels out (vecSumMag < 0.45)
-      const complexPhasePred = vecSumMag < 0.55 ? 1 : 0;
-      if (complexPhasePred === target) phaseOnlyComplexCorrect++;
-
-      // Real 1D rate-coding only sees scalarSumMag (~0.85 for both classes -> random 50% guess)
-      const realPhasePred = scalarSumMag > 0.85 ? 1 : 0;
-      if (realPhasePred === target) phaseOnlyRealCorrect++;
+      // Held-out iso-frequency sample, scored by real model predictions only
+      const sPhase = makeIsoSample(target);
+      if (predictClass(isoComplexNet.evaluateLoss(sPhase).predictions) === target) phaseOnlyComplexCorrect++;
+      if (predictClass(isoBlindNet.evaluateLoss(toPhaseBlind(sPhase)).predictions) === target) phaseOnlyBlindCorrect++;
+      if (predictClass(network.evaluateLoss(sPhase).predictions) === target) phaseOnlyMainCorrect++;
     }
 
     const totalMacs = 30 * 16 * 2 * (useKaratsuba ? 3 : 4);
@@ -300,7 +300,8 @@ export default function NetworkTab() {
       cleanAccComplex: (cleanCorrect / trials) * 100,
       noisyAccComplex: (noisyCorrect / trials) * 100,
       phaseOnlyAccComplex: (phaseOnlyComplexCorrect / trials) * 100,
-      phaseOnlyAccReal: (phaseOnlyRealCorrect / trials) * 100,
+      phaseOnlyAccBlind: (phaseOnlyBlindCorrect / trials) * 100,
+      phaseOnlyAccMain: (phaseOnlyMainCorrect / trials) * 100,
       confusionMatrix: cm,
       macSavedPercent: useKaratsuba ? 25 : 0,
       totalMacs,
@@ -318,10 +319,9 @@ export default function NetworkTab() {
       class1PhaseShift,
       signalNoise
     );
-    const outs = network.forward(sample.inputSpikeSequence);
     const evalRes = network.evaluateLoss(sample);
     setCurrentSample(sample);
-    setSampleOutputs(outs);
+    setSampleOutputs(evalRes.forward);
     setSampleProbs(evalRes.predictions);
   };
 
@@ -329,6 +329,8 @@ export default function NetworkTab() {
     const deg = ((radPhase + Math.PI) / (2 * Math.PI)) * 360;
     return `hsl(${deg.toFixed(1)}, 90%, 60%)`;
   };
+
+  const maxLossForChart = useMemo(() => Math.max(1.2, ...trainingLossHistory), [trainingLossHistory]);
 
   return (
     <motion.div
@@ -503,7 +505,7 @@ export default function NetworkTab() {
           <div className="space-y-1.5">
             <div className="flex justify-between text-xs font-mono text-elegant-muted">
               <span>{isEn ? 'Class 0 Carrier Freq:' : 'Tần Số Sóng Mang Lớp 0:'}</span>
-              <span className="text-elegant-cyan font-bold">{class0Freq.toFixed(1)} Hz (Δφ = 0°)</span>
+              <span className="text-elegant-cyan font-bold">{class0Freq.toFixed(1)} {isEn ? 'cyc/window' : 'chu kỳ/cửa sổ'} (Δφ = 0°)</span>
             </div>
             <input
               type="range"
@@ -519,7 +521,7 @@ export default function NetworkTab() {
           <div className="space-y-1.5">
             <div className="flex justify-between text-xs font-mono text-elegant-muted">
               <span>{isEn ? 'Class 1 Carrier Freq:' : 'Tần Số Sóng Mang Lớp 1:'}</span>
-              <span className="text-amber-400 font-bold">{class1Freq.toFixed(1)} Hz</span>
+              <span className="text-amber-400 font-bold">{class1Freq.toFixed(1)} {isEn ? 'cyc/window' : 'chu kỳ/cửa sổ'}</span>
             </div>
             <input
               type="range"
@@ -686,9 +688,8 @@ export default function NetworkTab() {
                 <path
                   d={trainingLossHistory
                     .map((loss, idx) => {
-                      const maxLoss = Math.max(...trainingLossHistory, 1.2);
                       const x = (idx / Math.max(1, trainingLossHistory.length - 1)) * 310 + 5;
-                      const y = 140 - Math.min(1, loss / maxLoss) * 125;
+                      const y = 140 - Math.min(1, loss / maxLossForChart) * 125;
                       return `${idx === 0 ? 'M' : 'L'} ${x.toFixed(1)},${y.toFixed(1)}`;
                     })
                     .join(' ')}
@@ -729,8 +730,8 @@ export default function NetworkTab() {
               <p className="text-[10px] text-elegant-muted font-mono mt-0.5">
                 {currentSample
                   ? isEn
-                    ? `Active Sample: Class ${currentSample.target} (fc = ${currentSample.carrierFreq}Hz, Δφ = ${((currentSample.spatialPhaseShift * 180) / Math.PI).toFixed(0)}°)`
-                    : `Mẫu đang thử: Lớp ${currentSample.target} (fc = ${currentSample.carrierFreq}Hz, Δφ = ${((currentSample.spatialPhaseShift * 180) / Math.PI).toFixed(0)}°)`
+                    ? `Active Sample: Class ${currentSample.target} (fc = ${currentSample.carrierFreq.toFixed(1)} cyc/window, Δφ = ${((currentSample.spatialPhaseShift * 180) / Math.PI).toFixed(0)}°)`
+                    : `Mẫu đang thử: Lớp ${currentSample.target} (fc = ${currentSample.carrierFreq.toFixed(1)} chu kỳ/cửa sổ, Δφ = ${((currentSample.spatialPhaseShift * 180) / Math.PI).toFixed(0)}°)`
                   : ''}
               </p>
             </div>
@@ -1095,16 +1096,21 @@ export default function NetworkTab() {
                     : 'Kiểm Định Thuần Pha (Cùng Tần Số, Chỉ Lệch Pha Δφ):'}
                 </div>
                 <div className="flex justify-between text-[11px]">
-                  <span className="text-elegant-cyan">CV-SNN (2D Phasor):</span>
-                  <span className="font-bold text-emerald-400">
-                    {benchmark.phaseOnlyAccComplex.toFixed(1)}%
-                  </span>
+                  <span className="text-elegant-cyan">{isEn ? 'CV-SNN (complex input):' : 'CV-SNN (đầu vào phức):'}</span>
+                  <span className="font-bold text-emerald-400">{benchmark.phaseOnlyAccComplex.toFixed(1)}%</span>
                 </div>
                 <div className="flex justify-between text-[11px]">
-                  <span className="text-rose-400">Real SNN (1D Rate):</span>
-                  <span className="font-bold text-rose-400">
-                    {benchmark.phaseOnlyAccReal.toFixed(1)}% (Blind to phase)
-                  </span>
+                  <span className="text-rose-400">{isEn ? 'Phase-blind SNN (|x| only):' : 'SNN mù pha (chỉ |x|):'}</span>
+                  <span className="font-bold text-rose-400">{benchmark.phaseOnlyAccBlind.toFixed(1)}%</span>
+                </div>
+                <div className="flex justify-between text-[11px]">
+                  <span className="text-elegant-muted">{isEn ? 'Your trained network on this test:' : 'Mạng bạn đã train trên bài này:'}</span>
+                  <span className="font-bold text-white">{benchmark.phaseOnlyAccMain.toFixed(1)}%</span>
+                </div>
+                <div className="text-[9px] text-elegant-muted">
+                  {isEn
+                    ? `Control models: same initial weights, hyper-parameters and ${ISO_TRAIN_STEPS} training samples; only input phase differs. Chance = 50%.`
+                    : `Mô hình đối chứng: cùng trọng số khởi tạo, siêu tham số và ${ISO_TRAIN_STEPS} mẫu huấn luyện; chỉ khác có/không có pha. Đoán ngẫu nhiên = 50%.`}
                 </div>
               </div>
 
@@ -1119,7 +1125,7 @@ export default function NetworkTab() {
                 </div>
                 <div className="grid grid-cols-2 gap-1.5 text-center text-[11px]">
                   <div className="p-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded text-emerald-300">
-                    TP (C0→C0): <strong>{benchmark.confusionMatrix[0][0]}</strong>
+                    TN (C0→C0): <strong>{benchmark.confusionMatrix[0][0]}</strong>
                   </div>
                   <div className="p-1.5 bg-rose-500/10 border border-rose-500/20 rounded text-rose-300">
                     FP (C0→C1): <strong>{benchmark.confusionMatrix[0][1]}</strong>

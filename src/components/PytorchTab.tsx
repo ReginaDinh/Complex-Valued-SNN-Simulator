@@ -1,18 +1,29 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { Terminal, Copy, Check } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { pytorchCodeString } from '../pytorchCode';
+import { copyText } from '../utils/clipboard';
 
 export default function PytorchTab() {
   const [copied, setCopied] = useState(false);
   const { language } = useLanguage();
   const isEn = language === 'en';
 
-  const handleCopyCode = () => {
-    navigator.clipboard.writeText(pytorchCodeString);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+  }, []);
+
+  const handleCopyCode = async () => {
+    const ok = await copyText(pytorchCodeString);
+    if (!ok) {
+      console.warn('Clipboard copy failed');
+      return;
+    }
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    copiedTimerRef.current = setTimeout(() => setCopied(false), 2000);
   };
 
   return (

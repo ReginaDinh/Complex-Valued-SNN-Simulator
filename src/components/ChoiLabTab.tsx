@@ -264,7 +264,9 @@ export default function ChoiLabTab() {
               const hwMag = Math.sqrt(hwRe * hwRe + hwIm * hwIm);
               const hwPhaseDeg = (Math.atan2(hwIm, hwRe) * 180) / Math.PI;
 
-              const phaseErr = Math.abs(idealPhaseDeg - hwPhaseDeg);
+              // Shortest angular distance on the circle, in [0, 180]
+              const phaseDiff = ((idealPhaseDeg - hwPhaseDeg + 540) % 360) - 180;
+              const phaseErr = Math.abs(phaseDiff);
               const rmse = Math.sqrt(
                 (idealRe - hwRe) * (idealRe - hwRe) + (idealIm - hwIm) * (idealIm - hwIm)
               );

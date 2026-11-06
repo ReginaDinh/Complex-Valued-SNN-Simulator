@@ -349,7 +349,7 @@ export default function App() {
             {/* Quick Status / Mode Indicator on Right */}
             <div className="hidden md:flex items-center gap-2 text-xs font-mono text-slate-400 shrink-0">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span>{isEn ? 'Hardware Ready' : 'Sẵn Sàng'}</span>
+              <span>{isEn ? 'Simulation Mode' : 'Chế độ mô phỏng'}</span>
             </div>
           </div>
         </header>
