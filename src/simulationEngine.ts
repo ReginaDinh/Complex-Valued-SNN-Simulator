@@ -511,14 +511,14 @@ export class TSComplexSNN {
     };
   }
 
-  evaluateLoss(sample: SignalSample): {
+  evaluateLoss(sample: SignalSample, record: boolean = true): {
     loss: number;
     predictions: number[];
     firingRates: number[];
     phaseCoherence: number[];
     forward: ForwardResult;
   } {
-    const forward = this.forward(sample.inputSpikeSequence);
+    const forward = this.forward(sample.inputSpikeSequence, record);
     const { surrogateRates, firingRates, phaseCoherence } = forward;
 
     // Temperature-scaled softmax for crisp class probability estimation

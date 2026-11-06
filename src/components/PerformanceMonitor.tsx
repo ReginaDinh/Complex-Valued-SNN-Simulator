@@ -13,7 +13,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
-import { compareBenchmarks } from '../utils/benchmark';
+import { BENCH_SAMPLES, compareBenchmarks } from '../utils/benchmark';
 import { mulberry32, hashSeed } from '../utils/random';
 import {
   perfTracker,
@@ -814,8 +814,8 @@ export default function PerformanceMonitor({ activeTab }: PerformanceMonitorProp
             <div className="flex items-center gap-1">
               <button
                 onClick={handleRunAllModulesSuite}
-                disabled={isRunningSuite}
-                className="px-2 py-1 text-[10px] font-semibold rounded bg-elegant-cyan/15 hover:bg-elegant-cyan/25 text-elegant-cyan border border-elegant-cyan/30 flex items-center gap-1 transition-colors cursor-pointer"
+                disabled={runningModuleId !== null || isRunningSuite}
+                className="px-2 py-1 text-[10px] font-semibold rounded bg-elegant-cyan/15 hover:bg-elegant-cyan/25 text-elegant-cyan border border-elegant-cyan/30 flex items-center gap-1 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 title={
                   isEn
                     ? 'Run predefined benchmark operations across all 8 SNN modules'
@@ -828,9 +828,13 @@ export default function PerformanceMonitor({ activeTab }: PerformanceMonitorProp
                     ? isEn
                       ? 'Running...'
                       : 'Đang chạy...'
-                    : isEn
-                      ? 'Run 8-Mod Suite'
-                      : 'Chạy 8 Module'}
+                    : runningModuleId !== null
+                      ? isEn
+                        ? 'Measuring...'
+                        : 'Đang đo...'
+                      : isEn
+                        ? 'Run 8-Mod Suite'
+                        : 'Chạy 8 Module'}
                 </span>
               </button>
               <button
@@ -1055,15 +1059,15 @@ export default function PerformanceMonitor({ activeTab }: PerformanceMonitorProp
                     <button
                       onClick={handleBenchmarkActiveModule}
                       disabled={runningModuleId !== null || isRunningSuite}
-                      className="px-2 py-0.5 text-[9.5px] font-semibold rounded bg-elegant-card hover:border-elegant-cyan text-white border border-slate-700/80 transition-colors cursor-pointer"
+                      className="px-2 py-0.5 text-[9.5px] font-semibold rounded bg-elegant-card hover:border-elegant-cyan text-white border border-slate-700/80 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {runningModuleId === activeTab
                         ? isEn
                           ? 'Testing...'
                           : 'Đang đo...'
                         : isEn
-                          ? `Test ${activeSpec.code} (6 Trials)`
-                          : `Đo ${activeSpec.code} (6 Lần)`}
+                          ? `Test ${activeSpec.code} (${BENCH_SAMPLES} samples)`
+                          : `Đo ${activeSpec.code} (${BENCH_SAMPLES} mẫu)`}
                     </button>
                     <button
                       onClick={handleLockCurrentAsBaseline}

@@ -22,6 +22,9 @@ export interface BenchmarkOptions {
   maxIterations?: number;
 }
 
+// Number of timed samples per benchmark (the median of these is reported)
+export const BENCH_SAMPLES = 7;
+
 // Accumulates every return value so the JIT cannot discard the benchmarked work as dead code.
 let benchSink = 0;
 export const readBenchSink = (): number => benchSink;
@@ -82,7 +85,7 @@ export function measure(
 ): MeasureResult {
   const resolution = getTimerResolutionMs();
   const warmup = options.warmup ?? 5;
-  const samples = options.samples ?? 7;
+  const samples = options.samples ?? BENCH_SAMPLES;
   const minSampleMs = options.minSampleMs ?? Math.max(5, 20 * resolution);
   const maxIterations = options.maxIterations ?? 1 << 20;
 
@@ -105,7 +108,7 @@ export function compareBenchmarks(
 ): CompareResult {
   const resolution = getTimerResolutionMs();
   const warmup = options.warmup ?? 5;
-  const samples = options.samples ?? 7;
+  const samples = options.samples ?? BENCH_SAMPLES;
   // ≥ 20 timer ticks per sample keeps quantization error ≤ 5 %
   const minSampleMs = options.minSampleMs ?? Math.max(5, 20 * resolution);
   const maxIterations = options.maxIterations ?? 1 << 20;

@@ -30,12 +30,15 @@ interface BenchmarkResult {
   phaseOnlyAccComplex: number; // fresh CV-SNN trained on the iso-frequency task
   phaseOnlyAccBlind: number; // identical model/training, phase removed from input (|x| only)
   phaseOnlyAccMain: number; // the user's trained network evaluated on the same task
+  isoPhaseShift: number; // Δφ actually used by the iso-frequency test (rad, clamped ≥ ISO_MIN_PHASE_SHIFT)
   confusionMatrix: [[number, number], [number, number]]; // cm[target][pred], Class 1 = positive: [[TN, FP], [FN, TP]]
   macSavedPercent: number;
   totalMacs: number;
 }
 
 const ISO_TRAIN_STEPS = 60;
+// Below ~0.8 rad the per-channel phase gradient is too small for a 60-step control run to separate
+const ISO_MIN_PHASE_SHIFT = 0.8;
 
 // Phase-blind control input: |x| in the real part, imaginary part 0 (all phase information removed)
 const toPhaseBlind = (s: SignalSample): SignalSample => ({
@@ -240,7 +243,7 @@ export default function NetworkTab() {
     // 3. Iso-frequency phase test as a controlled experiment: two fresh models with identical
     // initial weights, hyper-parameters, samples and training steps; only the input differs
     // (complex x vs phase-blind |x|).
-    const isoShift = Math.max(0.8, class1PhaseShift);
+    const isoShift = Math.max(ISO_MIN_PHASE_SHIFT, class1PhaseShift);
     const makeIsoSample = (cls: number) =>
       generateSpectralSignal(cls, 30, 16, class0Freq, class0Freq, isoShift, 0.1);
     const isoComplexNet = new TSComplexSNN(16, 2, netLeakMag, netLeakPhase, netThreshold, netResetMode, useKaratsuba, surrogateType);
@@ -269,7 +272,7 @@ export default function NetworkTab() {
         class1PhaseShift,
         0.08
       );
-      const resClean = network.evaluateLoss(sClean);
+      const resClean = network.evaluateLoss(sClean, false);
       const predClean = resClean.predictions[1] > resClean.predictions[0] ? 1 : 0;
       if (predClean === target) cleanCorrect++;
       cm[target][predClean]++;
@@ -284,15 +287,15 @@ export default function NetworkTab() {
         class1PhaseShift,
         0.55
       );
-      const resNoisy = network.evaluateLoss(sNoisy);
+      const resNoisy = network.evaluateLoss(sNoisy, false);
       const predNoisy = resNoisy.predictions[1] > resNoisy.predictions[0] ? 1 : 0;
       if (predNoisy === target) noisyCorrect++;
 
       // Held-out iso-frequency sample, scored by real model predictions only
       const sPhase = makeIsoSample(target);
-      if (predictClass(isoComplexNet.evaluateLoss(sPhase).predictions) === target) phaseOnlyComplexCorrect++;
-      if (predictClass(isoBlindNet.evaluateLoss(toPhaseBlind(sPhase)).predictions) === target) phaseOnlyBlindCorrect++;
-      if (predictClass(network.evaluateLoss(sPhase).predictions) === target) phaseOnlyMainCorrect++;
+      if (predictClass(isoComplexNet.evaluateLoss(sPhase, false).predictions) === target) phaseOnlyComplexCorrect++;
+      if (predictClass(isoBlindNet.evaluateLoss(toPhaseBlind(sPhase), false).predictions) === target) phaseOnlyBlindCorrect++;
+      if (predictClass(network.evaluateLoss(sPhase, false).predictions) === target) phaseOnlyMainCorrect++;
     }
 
     const totalMacs = 30 * 16 * 2 * (useKaratsuba ? 3 : 4);
@@ -302,6 +305,7 @@ export default function NetworkTab() {
       phaseOnlyAccComplex: (phaseOnlyComplexCorrect / trials) * 100,
       phaseOnlyAccBlind: (phaseOnlyBlindCorrect / trials) * 100,
       phaseOnlyAccMain: (phaseOnlyMainCorrect / trials) * 100,
+      isoPhaseShift: isoShift,
       confusionMatrix: cm,
       macSavedPercent: useKaratsuba ? 25 : 0,
       totalMacs,
@@ -1109,8 +1113,8 @@ export default function NetworkTab() {
                 </div>
                 <div className="text-[9px] text-elegant-muted">
                   {isEn
-                    ? `Control models: same initial weights, hyper-parameters and ${ISO_TRAIN_STEPS} training samples; only input phase differs. Chance = 50%.`
-                    : `Mô hình đối chứng: cùng trọng số khởi tạo, siêu tham số và ${ISO_TRAIN_STEPS} mẫu huấn luyện; chỉ khác có/không có pha. Đoán ngẫu nhiên = 50%.`}
+                    ? `Δφ used = ${benchmark.isoPhaseShift.toFixed(2)} rad${benchmark.isoPhaseShift > class1PhaseShift ? ` (raised from ${class1PhaseShift.toFixed(2)} to the ${ISO_MIN_PHASE_SHIFT} minimum)` : ''}. Control models: same initial weights, hyper-parameters and ${ISO_TRAIN_STEPS} training samples; only input phase differs. Chance = 50%.`
+                    : `Δφ đã dùng = ${benchmark.isoPhaseShift.toFixed(2)} rad${benchmark.isoPhaseShift > class1PhaseShift ? ` (nâng từ ${class1PhaseShift.toFixed(2)} lên mức tối thiểu ${ISO_MIN_PHASE_SHIFT})` : ''}. Mô hình đối chứng: cùng trọng số khởi tạo, siêu tham số và ${ISO_TRAIN_STEPS} mẫu huấn luyện; chỉ khác có/không có pha. Đoán ngẫu nhiên = 50%.`}
                 </div>
               </div>
 

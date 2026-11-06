@@ -1,29 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { Terminal, Copy, Check } from 'lucide-react';
+import { Terminal, Copy, Check, AlertCircle } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { pytorchCodeString } from '../pytorchCode';
-import { copyText } from '../utils/clipboard';
+import { useCopyStatus } from '../utils/useCopyStatus';
 
 export default function PytorchTab() {
-  const [copied, setCopied] = useState(false);
+  const { status: copyStatus, copy } = useCopyStatus();
   const { language } = useLanguage();
   const isEn = language === 'en';
 
-  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => {
-    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
-  }, []);
-
-  const handleCopyCode = async () => {
-    const ok = await copyText(pytorchCodeString);
-    if (!ok) {
-      console.warn('Clipboard copy failed');
-      return;
-    }
-    setCopied(true);
-    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
-    copiedTimerRef.current = setTimeout(() => setCopied(false), 2000);
+  const handleCopyCode = () => {
+    void copy(pytorchCodeString);
   };
 
   return (
@@ -51,8 +38,20 @@ export default function PytorchTab() {
             onClick={handleCopyCode}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-elegant-cyan hover:bg-[#52ebd3] text-elegant-bg rounded-md text-xs font-bold transition-all font-mono self-start shadow-md shadow-elegant-cyan/15"
           >
-            {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-            <span>{copied ? (isEn ? 'Copied!' : 'Đã sao chép!') : (isEn ? 'Copy PyTorch Code' : 'Sao chép PyTorch Code')}</span>
+            {copyStatus === 'copied' ? (
+              <Check className="w-3.5 h-3.5" />
+            ) : copyStatus === 'failed' ? (
+              <AlertCircle className="w-3.5 h-3.5" />
+            ) : (
+              <Copy className="w-3.5 h-3.5" />
+            )}
+            <span>
+              {copyStatus === 'copied'
+                ? isEn ? 'Copied!' : 'Đã sao chép!'
+                : copyStatus === 'failed'
+                  ? isEn ? 'Copy failed: select the code manually' : 'Chép thất bại: hãy bôi đen code để chép'
+                  : isEn ? 'Copy PyTorch Code' : 'Sao chép PyTorch Code'}
+            </span>
           </button>
         </div>
         <div className="p-4 bg-elegant-bg rounded-lg border border-elegant-muted/10 max-h-[500px] overflow-y-auto font-mono text-xs text-elegant-text leading-relaxed scrollbar-thin scrollbar-thumb-elegant-card">

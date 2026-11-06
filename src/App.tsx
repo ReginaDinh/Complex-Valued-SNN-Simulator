@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { useLanguage } from './contexts/LanguageContext';
 import {
   BookOpen,
@@ -17,12 +17,13 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 
 import TheoryTab from './components/TheoryTab';
-import SNNComparison from './components/SNNComparison';
-import PytorchTab from './components/PytorchTab';
-import NeuronTab from './components/NeuronTab';
-import NetworkTab from './components/NetworkTab';
-import VisionSNN from './components/VisionSNN';
-import NeuromorphicHardwareLab from './components/NeuromorphicHardwareLab';
+// Non-default tabs are loaded on first visit to keep the initial bundle small
+const SNNComparison = lazy(() => import('./components/SNNComparison'));
+const PytorchTab = lazy(() => import('./components/PytorchTab'));
+const NeuronTab = lazy(() => import('./components/NeuronTab'));
+const NetworkTab = lazy(() => import('./components/NetworkTab'));
+const VisionSNN = lazy(() => import('./components/VisionSNN'));
+const NeuromorphicHardwareLab = lazy(() => import('./components/NeuromorphicHardwareLab'));
 import PerformanceMonitor, { ActiveModelTabId } from './components/PerformanceMonitor';
 
 export type NavTabId =
@@ -47,6 +48,14 @@ interface NavGroup {
     subtitleVi: string;
     domainMetric: string;
   }[];
+}
+
+function TabFallback({ isEn }: { isEn: boolean }) {
+  return (
+    <div className="py-16 text-center text-xs font-mono text-elegant-muted">
+      {isEn ? 'Loading module…' : 'Đang tải phân hệ…'}
+    </div>
+  );
 }
 
 export default function App() {
@@ -384,7 +393,9 @@ export default function App() {
                 exit={{ opacity: 0, y: -8 }}
                 transition={{ duration: 0.15 }}
               >
-                <SNNComparison />
+                <Suspense fallback={<TabFallback isEn={isEn} />}>
+                  <SNNComparison />
+                </Suspense>
               </motion.div>
             )}
 
@@ -396,7 +407,9 @@ export default function App() {
                 exit={{ opacity: 0, y: -8 }}
                 transition={{ duration: 0.15 }}
               >
-                <NeuronTab />
+                <Suspense fallback={<TabFallback isEn={isEn} />}>
+                  <NeuronTab />
+                </Suspense>
               </motion.div>
             )}
 
@@ -408,7 +421,9 @@ export default function App() {
                 exit={{ opacity: 0, y: -8 }}
                 transition={{ duration: 0.15 }}
               >
-                <NetworkTab />
+                <Suspense fallback={<TabFallback isEn={isEn} />}>
+                  <NetworkTab />
+                </Suspense>
               </motion.div>
             )}
 
@@ -420,7 +435,9 @@ export default function App() {
                 exit={{ opacity: 0, y: -8 }}
                 transition={{ duration: 0.15 }}
               >
-                <VisionSNN onNavigateToHardware={() => setActiveTab('hardware')} />
+                <Suspense fallback={<TabFallback isEn={isEn} />}>
+                  <VisionSNN onNavigateToHardware={() => setActiveTab('hardware')} />
+                </Suspense>
               </motion.div>
             )}
 
@@ -432,7 +449,9 @@ export default function App() {
                 exit={{ opacity: 0, y: -8 }}
                 transition={{ duration: 0.15 }}
               >
-                <NeuromorphicHardwareLab />
+                <Suspense fallback={<TabFallback isEn={isEn} />}>
+                  <NeuromorphicHardwareLab />
+                </Suspense>
               </motion.div>
             )}
 
@@ -444,7 +463,9 @@ export default function App() {
                 exit={{ opacity: 0, y: -8 }}
                 transition={{ duration: 0.15 }}
               >
-                <PytorchTab />
+                <Suspense fallback={<TabFallback isEn={isEn} />}>
+                  <PytorchTab />
+                </Suspense>
               </motion.div>
             )}
           </AnimatePresence>

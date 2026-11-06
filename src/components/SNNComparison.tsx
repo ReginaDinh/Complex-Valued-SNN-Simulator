@@ -67,9 +67,9 @@ export default function SNNComparison() {
   // Phase of a (numerically) zero vector is undefined → null.
   const sumPhase = useMemo<number | null>(() => {
     if (sumMag < 1e-6) return null;
-    let angle = Math.atan2(complexSum.im, complexSum.re) * (180 / Math.PI);
-    if (angle < 0) angle += 360;
-    return angle;
+    const angle = Math.atan2(complexSum.im, complexSum.re) * (180 / Math.PI);
+    // Round first, then wrap: -1e-14° must show 0°, not 360°
+    return ((Math.round(angle) % 360) + 360) % 360;
   }, [complexSum, sumMag]);
 
   // Interference classification based on the actual vector result, not raw slider values.

@@ -2,7 +2,7 @@ import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Terminal, Cpu, Check, Copy, Info, AlertCircle } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
-import { copyText } from '../utils/clipboard';
+import { useCopyStatus } from '../utils/useCopyStatus';
 
 interface HardwareIntegrationModalProps {
   isOpen: boolean;
@@ -10,7 +10,7 @@ interface HardwareIntegrationModalProps {
 }
 
 export default function HardwareIntegrationModal({ isOpen, onClose }: HardwareIntegrationModalProps) {
-  const [copied, setCopied] = React.useState(false);
+  const { status: copyStatus, copy } = useCopyStatus();
   const { language } = useLanguage();
   const isEn = language === "en";
 
@@ -117,20 +117,8 @@ for epoch in range(10):
     print(f${isEn ? '"Epoch {epoch+1}/10 | Physical Network Loss: {total_loss:.4e}"' : '"Epoch {epoch+1}/10 | Tổn thất Mạng vật lý: {total_loss:.4e}"'})
 `;
 
-  const copiedTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  React.useEffect(() => () => {
-    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
-  }, []);
-
-  const copyToClipboard = async () => {
-    const ok = await copyText(pythonCode);
-    if (!ok) {
-      console.warn('Clipboard copy failed');
-      return;
-    }
-    setCopied(true);
-    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
-    copiedTimerRef.current = setTimeout(() => setCopied(false), 2000);
+  const copyToClipboard = () => {
+    void copy(pythonCode);
   };
 
   return (
@@ -244,8 +232,18 @@ for epoch in range(10):
                     onClick={copyToClipboard}
                     className="flex items-center gap-1.5 px-3 py-1.5 bg-elegant-card hover:bg-elegant-card/80 border border-elegant-muted/20 rounded-md text-xs font-medium text-white transition-colors"
                   >
-                    {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                    {copied ? (isEn ? 'Copied' : 'Đã sao chép') : (isEn ? 'Copy code' : 'Sao chép mã')}
+                    {copyStatus === 'copied' ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    ) : copyStatus === 'failed' ? (
+                      <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
+                    {copyStatus === 'copied'
+                      ? isEn ? 'Copied' : 'Đã sao chép'
+                      : copyStatus === 'failed'
+                        ? isEn ? 'Copy failed: select manually' : 'Chép thất bại: hãy bôi đen để chép'
+                        : isEn ? 'Copy code' : 'Sao chép mã'}
                   </button>
                 </div>
                 

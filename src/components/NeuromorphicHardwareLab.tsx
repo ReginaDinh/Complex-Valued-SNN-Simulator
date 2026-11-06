@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { motion } from 'motion/react';
 import {
   Cpu,
@@ -14,10 +14,11 @@ import {
   Sliders,
   Activity,
   ArrowRight,
+  AlertCircle,
 } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { InlineMath, BlockMath } from 'react-katex';
-import { copyText } from '../utils/clipboard';
+import { useCopyStatus } from '../utils/useCopyStatus';
 
 export default function NeuromorphicHardwareLab() {
   const { language } = useLanguage();
@@ -45,7 +46,7 @@ export default function NeuromorphicHardwareLab() {
   });
 
   // --- STATE FOR CODE COPY ---
-  const [copied, setCopied] = useState<boolean>(false);
+  const { status: copyStatus, copy } = useCopyStatus();
 
   const onDrag = (key: keyof typeof pos) => (_e: any, info: any) => {
     setPos(p => ({
@@ -204,20 +205,8 @@ def write_verify_pulse(channel: int, target_mS: float, tol: float = 0.05, max_it
 
 print("Ready: 4-Quadrant differential crossbar calibrated with Write-Verify.")`;
 
-  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => {
-    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
-  }, []);
-
-  const handleCopyCode = async () => {
-    const ok = await copyText(pythonDriverCode);
-    if (!ok) {
-      console.warn('Clipboard copy failed');
-      return;
-    }
-    setCopied(true);
-    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
-    copiedTimerRef.current = setTimeout(() => setCopied(false), 2000);
+  const handleCopyCode = () => {
+    void copy(pythonDriverCode);
   };
 
   return (
@@ -693,8 +682,20 @@ print("Ready: 4-Quadrant differential crossbar calibrated with Write-Verify.")`;
               onClick={handleCopyCode}
               className="flex items-center gap-1.5 px-3 py-1 bg-elegant-card hover:border-elegant-cyan text-elegant-cyan border border-slate-700/80 rounded-md text-xs font-mono transition-colors cursor-pointer"
             >
-              {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-              <span>{copied ? (isEn ? 'Copied' : 'Đã Chép') : isEn ? 'Copy Script' : 'Sao Chép'}</span>
+              {copyStatus === 'copied' ? (
+                <Check className="w-3.5 h-3.5" />
+              ) : copyStatus === 'failed' ? (
+                <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
+              ) : (
+                <Copy className="w-3.5 h-3.5" />
+              )}
+              <span>
+                {copyStatus === 'copied'
+                  ? isEn ? 'Copied' : 'Đã Chép'
+                  : copyStatus === 'failed'
+                    ? isEn ? 'Copy failed: select manually' : 'Chép thất bại: hãy bôi đen để chép'
+                    : isEn ? 'Copy Script' : 'Sao Chép'}
+              </span>
             </button>
           </div>
 
