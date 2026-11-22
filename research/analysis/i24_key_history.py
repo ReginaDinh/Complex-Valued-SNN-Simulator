@@ -7,17 +7,17 @@ When pair i arrives at time t_i, the hidden state = its own pulse (independent o
 shown before it (rotated by beta^dt in a cLIF network; with omega = 0 or LIF they decay without rotating, so they add up
 in phase). For every pair we compare the network's actual key with its history-free key: the key the same network
 produces at t_i when the input holds only that pair's pulse. Measures, on the test batch of I21 (same seeds):
-  overlap_actual    mean |<k_i, k_j>|, i != j, of the actual keys at the true write times (= key_overlap of I21)
-  overlap_free      the same for the history-free keys
-  sim_actual_free   mean |<k_i actual, k_i history-free>| over pairs that have history (not the first one)
-  sim_by_rank       the same by the pair's order in the sequence (rank 0 has no history, so its similarity is 1)
-  history_coherence mean |cos| between the history parts (actual - history-free) of two pairs: how shared the
-                    history is (chance = the overlap of random unit vectors)
-  carry_over_excess |cos(history of pair i, history-free key of an earlier pair)| minus the same for a later pair
-  history_alignment cos of the angle between the history term of an overlap, <k_i,k_j>_actual - <k_i,k_j>_free, and
-                    the free term <k_i,k_j>_free (+1: history adds in phase and pushes keys together; 0: random; < 0: cancels)
-  history_size      mean |history term| / mean |free term|
-  empty             fraction of keys that are (near) zero because no hidden neuron fired
+  overlap_actual   mean |<k_i, k_j>|, i != j, of the actual keys at the true write times (= key_overlap of I21)
+  overlap_free     the same for the history-free keys
+  sim_actual_free  mean |<k_i actual, k_i history-free>| over pairs that have history (not the first one)
+  sim_by_rank      the same by the pair's order in the sequence (rank 0 has no history, so its similarity is 1)
+  history_coherence  mean |cos| between the history parts (actual - history-free) of two pairs: how shared the
+                   history is (chance = the overlap of random unit vectors)
+  carry_over_excess  |cos(history of pair i, history-free key of an earlier pair)| minus the same for a later pair
+  history_alignment  cos of the angle between the history term of an overlap, <k_i,k_j>_actual - <k_i,k_j>_free, and
+                   the free term <k_i,k_j>_free (+1: history adds in phase and pushes keys together; 0: random; < 0: cancels)
+  history_size     mean |history term| / mean |free term|
+  empty            fraction of keys that are (near) zero because no hidden neuron fired
 (A) predicts overlap_actual < overlap_free (history is what separates the keys).
 (B) predicts, for the rotating network, actual ~ history-free (sim high, overlap_actual ~ overlap_free); for omega = 0
 and LIF, actual keys far from their history-free keys and overlapping more than them.
@@ -60,40 +60,40 @@ def analyse_model(model, seed: int, P: int = 8, n: int = 512) -> dict:
     from cvsnn.data.synthetic import assoc_recall_batch
     from experiments.ep1b import TASK
 
-    x, y = assoc_recall_batch(n, pairs=P, generator=torch.Generator().manual_seed(20_000 + seed), **TASK)  # the I21 test batch
+    x, y = assoc_recall_batch(n, pairs=P, generator=torch.Generator().manual_seed(20_000 + seed), **TASK)   # the I21 test batch
     cplx = model.cfg.kind == "cvsnn"
     run = lambda inp: model(torch.complex(inp, torch.zeros_like(inp)) if cplx else inp)
     with torch.no_grad():
         lg, _ = run(x)
-        k = model.fw.last["k"]                                        # (T, B, H, d)
+        k = model.fw.last["k"]                                                   # (T, B, H, d)
         B, w, nk = x.shape[1], TASK["window"], TASK["n_keys"]
         b = torch.arange(B)
         shown = x[:w, :, :nk].sum(-1) > 0
-        times = torch.sort(torch.argsort(shown.T.float(), dim=1, descending=True, stable=True)[:, :P], dim=1).values  # (B, P), in order
-        k_act = k[times, b.unsqueeze(1)]                              # (B, P, H, d)
+        times = torch.sort(torch.argsort(shown.T.float(), dim=1, descending=True, stable=True)[:, :P], dim=1).values   # (B, P), in order
+        k_act = k[times, b.unsqueeze(1)]                                         # (B, P, H, d)
         free = []
-        for i in range(P):                                            # only pair i's pulse (write times are distinct)
+        for i in range(P):                                                       # only pair i's pulse (write times are distinct)
             xi = torch.zeros_like(x)
             xi[times[:, i], b] = x[times[:, i], b]
             run(xi)
-            free.append(model.fw.last["k"][times[:, i], b])           # (B, H, d)
+            free.append(model.fw.last["k"][times[:, i], b])                      # (B, H, d)
         k_free = torch.stack(free, 1)
-    sim = inner(k_act, k_free)                                        # (B, P, H)
+    sim = inner(k_act, k_free)                                                   # (B, P, H)
     # what the history adds to each key, and whether it is shared between pairs: mean |cos| between the history parts
     # of two pairs (both with history). Shared (coherent) history pushes all keys the same way and raises their overlap.
-    dk = (k_act - k_free)[:, 1:]                                      # (B, P-1, H, d)
+    dk = (k_act - k_free)[:, 1:]                                                 # (B, P-1, H, d)
     dn = dk / (torch.sqrt((dk.abs() ** 2).sum(-1, keepdim=True)) + 1e-9)
     # carry-over: does pair i's history part point at the history-free key of an EARLIER pair (that is in its
     # history) more than at a LATER one (control, cannot be in it)?
-    ci = inner(dn.unsqueeze(2), k_free.unsqueeze(1)).permute(0, 3, 1, 2)  # (B, H, P-1, P): |cos(history of i, free key of j)|
+    ci = inner(dn.unsqueeze(2), k_free.unsqueeze(1)).permute(0, 3, 1, 2)       # (B, H, P-1, P): |cos(history of i, free key of j)|
     rank_i = torch.arange(1, P).view(-1, 1)
     earlier, later = torch.arange(P).view(1, -1) < rank_i, torch.arange(P).view(1, -1) > rank_i
     carry = ci[..., earlier].mean().item() - ci[..., later].mean().item()
     # how the history term of an overlap, <k_i, k_j>_actual - <k_i, k_j>_free, combines with the free term
     ip = lambda a, c: (torch.conj(a) * c).sum(-1) if torch.is_complex(a) else (a * c).sum(-1)
-    A, F = ip(k_act.unsqueeze(2), k_act.unsqueeze(1)), ip(k_free.unsqueeze(2), k_free.unsqueeze(1))  # (B, P, P, H)
+    A, F = ip(k_act.unsqueeze(2), k_act.unsqueeze(1)), ip(k_free.unsqueeze(2), k_free.unsqueeze(1))   # (B, P, P, H)
     both = ~torch.eye(P, dtype=torch.bool)
-    both[0, :] = both[:, 0] = False                                   # both pairs have history
+    both[0, :] = both[:, 0] = False                                              # both pairs have history
     Hs, Fs = (A - F).permute(0, 3, 1, 2)[..., both], F.permute(0, 3, 1, 2)[..., both]
     align = (((Hs * torch.conj(Fs)).real if torch.is_complex(Hs) else Hs * Fs) / (Hs.abs() * Fs.abs() + 1e-9)).mean().item()
     norm = lambda z: torch.sqrt((z.abs() ** 2).sum(-1))
@@ -117,7 +117,7 @@ def main() -> None:
         for path in sorted(Path(a.models).glob(f"P8_{v}_s*.pt"), key=lambda p: int(p.stem.split("_s")[-1])):
             r = analyse_model(load(path), int(path.stem.split("_s")[-1]))
             rows.append({"variant": v, **r})
-        print(v, {k: (round(val, 3) if isinstance(val, float) else val) for k, val in r.items() if k != "sim_by_rank"}, flush=True)
+            print(v, {k: (round(val, 3) if isinstance(val, float) else val) for k, val in r.items() if k != "sim_by_rank"}, flush=True)
     keys = ("test_acc", "overlap_actual", "overlap_free", "sim_actual_free", "history_coherence", "carry_over_excess",
             "history_alignment", "history_size", "empty_actual", "empty_free")
     L = ["# I24: actual keys vs history-free keys of the plastic synapse (P1b, P = 8, I21 models, 10 seeds)", "",
