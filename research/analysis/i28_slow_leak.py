@@ -4,13 +4,13 @@ in LIF? (I28b/c/d: 0.99 vs 0.32, 0.93 vs 0.26, 0.84 vs 0.23)
     cd research && .venv/bin/python -m analysis.i28_slow_leak [--models results/ei28b/models]
 
 On the I28b test batch (8 items, one theta cycle), for the tagged networks trained with the fast and the slow ring:
-  stuck_on / _off fraction of hidden neurons that fire on > 95 % / < 5 % of all (time, sample) points (a CV-SNN
-                  neuron that fires on every step still sends its phase; a LIF neuron that does sends nothing)
-  value_item_sep  1 - mean |cos(v_n, v_m)| over slot pairs holding different items, divided by the same for pairs
-                  holding the same item: > 0 means the stored values tell items apart (0 = not at all)
-  content_match   |<k_n, q>| before the theta tag, for the queried slot n: the theta tag can only pick slot n
-                  cleanly if the content parts of the write key and of the query agree
-  retrieval       |<k_n, q>| after the tag for the queried slot, and the mean over the other 7 slots
+  stuck_on / _off  fraction of hidden neurons that fire on > 95 % / < 5 % of all (time, sample) points (a CV-SNN
+                   neuron that fires on every step still sends its phase; a LIF neuron that does sends nothing)
+  value_item_sep   1 - mean |cos(v_n, v_m)| over slot pairs holding different items, divided by the same for pairs
+                   holding the same item: > 0 means the stored values tell items apart (0 = not at all)
+  content_match    |<k_n, q>| before the theta tag, for the queried slot n: the theta tag can only pick slot n
+                   cleanly if the content parts of the write key and of the query agree
+  retrieval        |<k_n, q>| after the tag for the queried slot, and the mean over the other 7 slots
 Candidate explanations: (a) slow LIF neurons get stuck (no reset, |beta| near 1), so the values carry no item;
 (b) the content parts of keys and queries drift apart (history), so the tag cannot separate slots.
 """
@@ -53,23 +53,23 @@ def analyse(path: Path, seed: int) -> dict:
     h.remove()
     L = model.fw.last
     n_items, slot, tail, ns = task["items"], task["slot"], task["tail"], task["n_symbols"]
-    frac = cap["fire"].float().mean((0, 1))                       # per hidden neuron
+    frac = cap["fire"].float().mean((0, 1))                                     # per hidden neuron
     stuck = ((frac > 0.95) | (frac < 0.05)).float().mean().item()
     stuck_on, stuck_off = (frac > 0.95).float().mean().item(), (frac < 0.05).float().mean().item()
     tw = [n * slot for n in range(n_items)]
     b = torch.arange(x.shape[1])
-    items = torch.stack([x[t, :, :ns].argmax(-1) for t in tw], 1)  # (B, items)
-    V = unit(torch.stack([L["v"][t] for t in tw], 1))              # (B, items, H, d)
-    C = inner(V.unsqueeze(2), V.unsqueeze(1)).mean(-1)             # (B, items, items)
+    items = torch.stack([x[t, :, :ns].argmax(-1) for t in tw], 1)              # (B, items)
+    V = unit(torch.stack([L["v"][t] for t in tw], 1))                            # (B, items, H, d)
+    C = inner(V.unsqueeze(2), V.unsqueeze(1)).mean(-1)                           # (B, items, items)
     off = ~torch.eye(n_items, dtype=torch.bool)
     same = (items.unsqueeze(2) == items.unsqueeze(1)) & off
     diff = (items.unsqueeze(2) != items.unsqueeze(1)) & off
     sep = 1 - C[diff].mean().item() / C[same].mean().item()
-    Kr = torch.stack([L["k_raw"][t] for t in tw], 1)               # (B, items, H, d)
+    Kr = torch.stack([L["k_raw"][t] for t in tw], 1)                             # (B, items, H, d)
     K = torch.stack([L["k"][t] for t in tw], 1)
-    qr, q = L["q_raw"][-1], L["q"][-1]                            # (B, H, d), the query (same on every read-out step)
+    qr, q = L["q_raw"][-1], L["q"][-1]                                           # (B, H, d), the query (same on every read-out step)
     content = inner(Kr[b, pos], qr).mean().item()
-    M = inner(K, q.unsqueeze(1))                                   # (B, items, H)
+    M = inner(K, q.unsqueeze(1))                                                 # (B, items, H)
     tgt = M[b, pos].mean().item()
     mask = torch.ones(x.shape[1], n_items, dtype=torch.bool)
     mask[b, pos] = False
