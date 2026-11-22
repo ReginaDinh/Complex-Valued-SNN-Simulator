@@ -31,7 +31,7 @@ def analyse(path: Path, seed: int) -> dict:
     x, theta, y, pos = serial_recall_batch(1024, generator=torch.Generator().manual_seed(20_000 + seed), **task)
     n_items, cyc, slot, tail, ns = task["items"], task["cycle_slots"], task["slot"], task["tail"], task["n_symbols"]
     xs = x.clone()
-    xs[-tail:, :, ns + 1:] = xs[-tail:, :, ns + 1:].flip(-1)            # swapped cycle cue
+    xs[-tail:, :, ns + 1:] = xs[-tail:, :, ns + 1:].flip(-1)                    # swapped cycle cue
     model = SequenceClassifier(network_input(x, theta, cplx).shape[-1], ns, ModelConfig(**ck["model"]))
     model.load_state_dict(ck["state"])
     model.eval()
@@ -72,7 +72,7 @@ def main() -> None:
             rows.append({"variant": v, **analyse(path, int(path.stem.split("_s")[-1]))})
     L = ["# I28c follow-up: where the cycle cue picks the item (read-out input spliced between normal-cue and swapped-cue runs)", "",
          "Fraction of wrapped samples (two same-phase items differ) answered with the queried item / with the partner item; mean over 5 seeds.", "",
-         "| variant | normal | swapped cue | h normal + f swapped | h swapped + f normal |", "|---|---|---|---|---|---|"]
+         "| variant | normal | swapped cue | h normal + f swapped | h swapped + f normal |", "|---|---|---|---|---|"]
     for v in ("cv_fw2_tag", "lif_fw2_d11_tag"):
         rs = [r for r in rows if r["variant"] == v]
         m = lambda k: sum(r[k] for r in rs) / len(rs)
