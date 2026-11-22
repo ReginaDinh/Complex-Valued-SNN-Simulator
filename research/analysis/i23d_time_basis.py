@@ -4,13 +4,13 @@ lattices help the wide-window memory task? (I23, I23b, I23c, I28a; H6d table)
     cd research && .venv/bin/python -m analysis.i23d_time_basis
 
 For each frequency set (32 neurons, |beta| drawn on the ring r^2 ~ U(0.99^2, 0.9999^2) as in the selected H6d
-setting, 5 draws), an event at lag L before the read-out leaves the trace z_j(L) = |beta_j|^L e^{i w_j L} on neuron
+setting, 5 draws), an event at lag L before the read-out leaves the trace z_j(L) = |beta_j|^L e^{j w_j L} on neuron
 j. Over the task's lags L in [D, D + W) = [400, 800) this gives a code matrix C (W x 32). Measures:
-  eff_rank   participation ratio of the singular values of C (how many independent time directions)
-  crowding   mean |cos| between the codes of lags at least 10 steps apart (0 = all distinct)
-  decode_acc a ridge read-out decoding the lag bin (16 bins of 25 steps) from z + noise (sigma 0.05 x code norm);
-             the read-out sees Re and Im, as the network's read-out does
-  slow       neurons with w < 0.05 rad/step
+  eff_rank     participation ratio of the singular values of C (how many independent time directions)
+  crowding     mean |cos| between the codes of lags at least 10 steps apart (0 = all distinct)
+  decode_acc   a ridge read-out decoding the lag bin (16 bins of 25 steps) from z + noise (sigma 0.05 x code norm);
+               the read-out sees Re and Im, as the network's read-out does
+  slow         neurons with w < 0.05 rad/step
 and Spearman correlations of each with the trained-network accuracy at W = 400 (frozen frequencies, H6d/I23/I23b/
 I23c/I28a). Exploratory: a correlation only suggests which property matters.
 """
@@ -42,14 +42,14 @@ def freqs(name: str, g: torch.Generator) -> torch.Tensor:
 def measures(w: torch.Tensor, g: torch.Generator) -> dict:
     r = torch.sqrt(torch.rand(N, generator=g, dtype=torch.float64) * (0.9999 ** 2 - 0.99 ** 2) + 0.99 ** 2)
     L = torch.arange(D, D + W, dtype=torch.float64).view(-1, 1)
-    C = torch.polar(r.view(1, -1) ** L, w.view(1, -1) * L)          # (W, N) complex
+    C = torch.polar(r.view(1, -1) ** L, w.view(1, -1) * L)                       # (W, N) complex
     sv = torch.linalg.svdvals(C)
     eff = (sv.sum() ** 2 / (sv ** 2).sum()).item()
     U = C / C.abs().pow(2).sum(1, keepdim=True).sqrt()
     G = (U @ U.conj().T).abs()
     far = (torch.arange(W).view(-1, 1) - torch.arange(W).view(1, -1)).abs() >= 10
     crowd = G[far].mean().item()
-    X = torch.cat([C.real, C.imag], 1)                              # read-out sees Re and Im
+    X = torch.cat([C.real, C.imag], 1)                                            # read-out sees Re and Im
     bins = (torch.arange(W) // 25).long()
     Y = torch.nn.functional.one_hot(bins, 16).double()
     sig = 0.05 * X.norm(dim=1).mean()
@@ -82,7 +82,7 @@ def main() -> None:
         r = rows[n]
         L.append(f"| {n} | {ACC_W400[n]:.3f} | {r['eff_rank']:.2f} | {r['crowding']:.3f} | {r['decode_acc']:.3f} | {r['slow']:.1f} |")
     L += ["", "Spearman correlation with trained accuracy (18 sets): " + ", ".join(f"{k} {spearman([rows[n][k] for n in names], acc):+.2f}"
-                                                                                for k in ("eff_rank", "crowding", "decode_acc", "slow"))]
+                                                                              for k in ("eff_rank", "crowding", "decode_acc", "slow"))]
     md = "\n".join(L) + "\n"
     out = ROOT / "results" / "i23d"
     out.mkdir(parents=True, exist_ok=True)
