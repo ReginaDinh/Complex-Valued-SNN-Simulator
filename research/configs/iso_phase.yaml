@@ -1,0 +1,36 @@
+name: iso_phase
+hypothesis: >-
+  Two classes share the same carrier frequency and differ only in the inter-channel phase
+  gradient. A model that sees phase (complex input, or Re/Im as real features) should separate
+  them; a model that sees only |x| must stay at chance (50%). This is a known-answer sanity check
+  of the whole pipeline, not a research result.
+device: cpu
+seeds: 5
+task:
+  kind: iso_phase
+  time_steps: 30
+  features: 16
+  freq0: 1.5
+  phase_shift: 1.5708
+  noise: 0.1
+train:
+  steps: 200
+  batch_size: 32
+  lr: 0.003
+  test_size: 512
+models:
+  - name: cvsnn
+    input: complex
+    model: {kind: cvsnn}
+  - name: lif_magnitude
+    input: magnitude
+    model: {kind: lif}
+  - name: lif_reim
+    input: reim
+    model: {kind: lif}
+  - name: cvnn
+    input: complex
+    model: {kind: cvnn}
+  - name: lru
+    input: complex
+    model: {kind: lru, lru_state: 16}
