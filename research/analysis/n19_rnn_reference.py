@@ -3,9 +3,9 @@ long-memory cLIF and the spiking baselines.
 
     cd research && .venv/bin/python -m analysis.n19_rnn_reference [out_dir]
 
-Synthetic sequence (I54i protocol): GRU / LSTM selected on seeds 0–4 over lr_rec x lr_ecl x multiplier (results/n19/syn),
+Synthetic sequence (I54i protocol): GRU / LSTM selected on seeds 0-4 over lr_rec x lr_ecl x multiplier (results/n19/syn),
 10 seeds at the selection; the rotating network from I54i (same seeds). Benchmarks with replay (I64a / I64b protocol): the
-recall lr and multiplier inherited from the synthetic selection, the later-phase lr selected on seeds 0–4; the rotating
+recall lr and multiplier inherited from the synthetic selection, the later-phase lr selected on seeds 0-4; the rotating
 network and the spiking baselines from I64a / I64b / I67 at their selections. Sign test (two-sided, ties dropped) and
 paired differences with 95% CI over the 10 seeds.
 """
@@ -56,7 +56,7 @@ def main(out: Path) -> None:
     from cvsnn.utils import mean_ci95
     L = ["# N19: non-spiking references (GRU, LSTM) vs the rotating long-memory cLIF", ""]
     res = {}
-    # — synthetic sequence
+    # --- synthetic sequence
     syn = load(["results/n19/syn/**/runs.jsonl"])
     ref = load(["results/ei54i/run1/runs.jsonl"])
     rot = cell(ref, "cand_long_fw003|2heads|phaselr", "0.01/0.0003")
@@ -65,7 +65,7 @@ def main(out: Path) -> None:
           "|---|---|---|---|---|---|---|---|---|"]
     cells_syn = {"rotating cLIF (I54i)": rot}
     sel_syn = {}
-    for fam, names in (("GRU", ("gru_slowfw", "gru_fw003", "gru_fw001", "gru_fw0003")), ("LSTM", ("lstm_slowfw", "lstm_fw003", "lstm_fw001", "lstm_fw0003"))):
+    for fam, names in (("GRU", ("gru_slowfw", "gru_fw003", "gru_fw001", "gru_fw0003")), ("LSTM", ("lstm_slowfw", "lstm_fw003", "lstm_fw001"))):
         (v, lr), full = select(syn, {n + "|2heads|phaselr" for n in names})
         sel_syn[fam] = (v.split("|")[0], lr)
         cells_syn[fam] = cell(syn, v, lr)
@@ -89,7 +89,7 @@ def main(out: Path) -> None:
             out_.append(f"{w}/{len(seeds)} (p = {sign_p(w, l_):.3f})")
         d = mean_ci95([rot[s]["ecl_final_avg"] - c[s]["ecl_final_avg"] for s in seeds])
         L.append(f"| {fam} | " + " | ".join(out_) + f" | {d[0]:+.3f} ± {d[2]:.3f} |")
-    # — benchmarks with replay
+    # --- benchmarks with replay
     bench = load(["results/n19/mnist/**/runs.jsonl", "results/n19/shd/**/runs.jsonl"])
     old = load(["results/ei64/**/runs.jsonl", "results/ei67/**/runs.jsonl"])
     base = {"rotating cLIF": ("cand_long_fw003", {"mnist": "0.01/0.001", "shd": "0.01/0.001"}),
@@ -99,7 +99,7 @@ def main(out: Path) -> None:
             "SE-adLIF": ("se_adlif_fw001", {"mnist": "0.1/0.001", "shd": "0.1/0.003"}),
             "BRF": ("brfv2_fw003", {"mnist": "0.01/0.003", "shd": "0.01/0.001"})}
     for task, label in (("mnist", "Permuted MNIST + replay (5 tasks)"), ("shd", "Split-SHD + replay (5 tasks)")):
-        L += ["", f"## {label}", "", "| model | params | later-phase lr | seeds | final accuracy | learned | forgetting | rotating higher in | paired diff (rotating – model) |",
+        L += ["", f"## {label}", "", "| model | params | later-phase lr | seeds | final accuracy | learned | forgetting | rotating higher in | paired diff (rotating − model) |",
               "|---|---|---|---|---|---|---|---|---|"]
         cells_b = {}
         for name, (v, lrs) in base.items():
