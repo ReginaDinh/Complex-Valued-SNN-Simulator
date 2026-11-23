@@ -82,7 +82,7 @@ def _slot_combine_ops(k: int | None, karatsuba: bool) -> tuple[float, float]:
     if not k:
         return 0, 0
     cm, ca = (3, 5) if karatsuba else (4, 2)
-    free = 4 if k % 4 == 0 else (2 if k % 2 == 0 else 1)  # rotations by multiples of 90 deg are sign/swap
+    free = 4 if k % 4 == 0 else (2 if k % 2 == 0 else 1)   # rotations by multiples of 90 deg are sign/swap
     nontrivial = max(0, k - free)
     return nontrivial * cm, nontrivial * ca + 2 * (k - 1)
 
@@ -91,10 +91,10 @@ def _neuron_ops(neuron: str, karatsuba: bool, sqrt_div_mults: float, binned_out:
                 binary_out: bool = False) -> tuple[float, float]:
     """(mults, adds) for one neuron update in one time step."""
     if neuron == "lif":
-        return 1, 3                    # leak mult, add input, compare, reset subtract
+        return 1, 3                      # leak mult, add input, compare, reset subtract
     if neuron == "clif":
         cm, ca = (3, 5) if karatsuba else (4, 2)
-        # beta*u (complex mult), + input (2 add), |u|^2 (2 mul 1 add), compare (1), soft reset 2 mul 2 add.
+        # beta*u (complex mult), + input (2 add), |u|^2 (2 mul 1 add), compare (1), soft reset 2 mul 2 add,
         # unit phasor for the emitted spike: sqrt + 2 div; a timing-coded spike only needs a slot
         # (a few comparisons) instead, a binary spike nothing beyond the comparison. Spike costs are counted
         # every step (upper bound); the output layer is costed as a phasor emitter (as in E-HW).
@@ -107,7 +107,7 @@ def _neuron_ops(neuron: str, karatsuba: bool, sqrt_div_mults: float, binned_out:
         return cm + 2, ca + 2 + 1
     if neuron == "cvnn":
         cm, ca = (3, 5) if karatsuba else (4, 2)
-        return cm + 2 + 3 * sqrt_div_mults, ca + 2 + 1 + 1    # leak, |u|, modReLU scale
+        return cm + 2 + 3 * sqrt_div_mults, ca + 2 + 1 + 1     # leak, |u|, modReLU scale
     raise ValueError(neuron)
 
 
@@ -171,10 +171,10 @@ def estimate_cost(trace: list[dict], table: EnergyTable, karatsuba: bool = True)
         phases = 2 if (L["complex_weights"] and L["input_kind"] == COMPLEX) else 1
         dev_per_weight_per_phase = 4 if L["complex_weights"] else 2
         devices += L["n_in"] * L["n_out"] * dev_per_weight_per_phase
-        active = L["in_events"]                        # row drives per phase (summed over time)
+        active = L["in_events"]                       # row drives per phase (summed over time)
         rows += active * phases
         dev += active * phases * L["n_out"] * dev_per_weight_per_phase
-        reads_per_step = L["phase_bins"] if binned else phases      # one ADC pass per slot (conservative)
+        reads_per_step = L["phase_bins"] if binned else phases     # one ADC pass per slot (conservative)
         adc += L["T"] * L["n_out"] * reads_per_step * (2 if L["complex_weights"] else 1)
         nm, na = neuron_cost(i)
         n_mul += L["T"] * L["n_out"] * nm
