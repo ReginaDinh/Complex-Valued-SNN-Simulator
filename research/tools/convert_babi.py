@@ -4,7 +4,7 @@ facebook/babi_qa en-valid-qa1 for task 1) into research/data/babi1k.json for exp
     cd research && .venv/bin/python -I tools/convert_babi.py data/babi_raw/rawthil data/babi1k.json
 
 Output: a shared word vocabulary and answer list over all 20 tasks, and per task and split a list of samples
-("sents": [[word ids] per sentence], "q": [word ids], "a": answer id). Multi-word answers (task 8 lists, task 19
+{"sents": [[word ids] per sentence], "q": [word ids], "a": answer id}. Multi-word answers (task 8 lists, task 19
 paths) are kept as one answer label.
 """
 
