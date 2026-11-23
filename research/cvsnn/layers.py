@@ -33,10 +33,10 @@ class ComplexLinear(nn.Module):
     the benefit is fewer multipliers in hardware, not speed on CPU/GPU.
 
     ``init``:
-    * ``"js"``: same scheme as the browser engine: |w| ~ (0.3 + 0.7 U) * sqrt(1.5 / fan_in),
-      phase ~ U(-pi, pi).
-    * ``"glorot"``: complex Glorot (Trabelsi et al., 2018): Rayleigh magnitude with
-      Var(w) = 2 / (fan_in + fan_out), uniform phase.
+      * ``"js"``: same scheme as the browser engine: |w| ~ (0.3 + 0.7 U) * sqrt(1.5 / fan_in),
+        phase ~ U(-pi, pi).
+      * ``"glorot"``: complex Glorot (Trabelsi et al., 2018): Rayleigh magnitude with
+        Var(w) = 2 / (fan_in + fan_out), uniform phase.
     """
 
     def __init__(self, in_features: int, out_features: int, bias: bool = False, karatsuba: bool = True, init: str = "js"):
@@ -154,9 +154,9 @@ class Urgency(nn.Module):
     """H5: a deadline-dependent modulation with one learnable strength c. With g_t = (min(t + 1, D) / D)^2 (0 at the
     start, 1 at the deadline D), the neuron sees one of (Cisek et al. 2009 urgency gating; Drugowitsch et al. 2012
     collapsing bounds; 'damping' is the user's idea of a convergence pressure near the deadline):
-      'damping'      : |beta_t| = |beta| exp(-c g_t)   (c >= 0; the state settles as the deadline approaches)
-      'threshold'    : V_th,t = V_th (1 - c g_t)       (0 <= c <= 0.9; collapsing bound)
-      'gain'         : I_t (1 + c g_t)                 (c >= 0; growing urgency signal)
+      'damping'  : |beta_t| = |beta| exp(-c g_t)   (c >= 0; the state settles as the deadline approaches)
+      'threshold': V_th,t = V_th (1 - c g_t)       (0 <= c <= 0.9; collapsing bound)
+      'gain'     : I_t (1 + c g_t)                 (c >= 0; growing urgency signal)
       'damping_const': |beta_t| = |beta| exp(-c)       (control: the same extra leak at every step, no deadline schedule)"""
 
     KINDS = ("damping", "threshold", "gain", "damping_const")
@@ -187,23 +187,23 @@ class Urgency(nn.Module):
 class CLIF(nn.Module):
     """Complex leaky integrate-and-fire neuron (cLIF), unrolled over time (full BPTT).
 
-    U_pre[t] = beta * U[t-1] + I[t],        beta = |beta| e^{j omega}
-    S[t]     = H(|U_pre[t]| - V_th) * e^{j arg U_pre[t]}       (spike_mode="phasor")
-               H * e^{j q_K(arg U_pre[t])}                     (phasor + phase_bins=K)
-               H(|U_pre[t]| - V_th) * U_pre[t]                 (spike_mode="graded")
-               H(|U_pre[t]| - V_th)  or  H(Re U_pre[t] - V_th) (spike_mode="binary", binary_on="mag" | "re")
-               K real 0/1 lines, the event on the line of its phase slot   (spike_mode="slots", phase_bins=K)
-    A binary spike is a real 0/1 event: the phase stays inside the neuron (as in PRF / C-SiLIF), the
-    next layer's complex weights turn it into a complex current. With binary_on="re" the spike time
-    within the rotation still reflects the phase, at the resolution of one step.
-    soft reset: U[t] = U_pre[t] - V_th * H * e^{j arg U_pre[t]}  (keeps the phase)
-    hard reset: U[t] = U_pre[t] * (1 - H)
-    no reset:   U[t] = U_pre[t]  (linear state; spikes are only a read-out, as in PRF / C-SiLIF;
-                computed for all t at once by FFT convolution)
-    brf reset:  no subtraction. A refractory trace q[t] = g q[t-1] + H raises the threshold to V_th + q
-                and temporarily increases damping, beta_t = beta * exp(-s q[t-1]) (phase unchanged),
-                adapted from the balanced resonate-and-fire neuron (Higuchi et al., ICML 2024, Eq. 9-12).
-                In BRF the extra damping enters as delta * q with time step delta = 0.01, hence s = 0.01
+        U_pre[t] = beta * U[t-1] + I[t],        beta = |beta| e^{j omega}
+        S[t]     = H(|U_pre[t]| - V_th) * e^{j arg U_pre[t]}       (spike_mode="phasor")
+                   H * e^{j q_K(arg U_pre[t])}                     (phasor + phase_bins=K)
+                   H(|U_pre[t]| - V_th) * U_pre[t]                 (spike_mode="graded")
+                   H(|U_pre[t]| - V_th)  or  H(Re U_pre[t] - V_th) (spike_mode="binary", binary_on="mag" | "re")
+                   K real 0/1 lines, the event on the line of its phase slot   (spike_mode="slots", phase_bins=K)
+        A binary spike is a real 0/1 event: the phase stays inside the neuron (as in PRF / C-SiLIF), the
+        next layer's complex weights turn it into a complex current. With binary_on="re" the spike time
+        within the rotation still reflects the phase, at the resolution of one step.
+        soft reset: U[t] = U_pre[t] - V_th * H * e^{j arg U_pre[t]}  (keeps the phase)
+        hard reset: U[t] = U_pre[t] * (1 - H)
+        no reset:   U[t] = U_pre[t]  (linear state; spikes are only a read-out, as in PRF / C-SiLIF;
+                    computed for all t at once by FFT convolution)
+        brf reset:  no subtraction. A refractory trace q[t] = g q[t-1] + H raises the threshold to V_th + q
+                    and temporarily increases damping, beta_t = beta * exp(-s q[t-1]) (phase unchanged),
+                    adapted from the balanced resonate-and-fire neuron (Higuchi et al., ICML 2024, Eq. 9-12).
+                    In BRF the extra damping enters as delta * q with time step delta = 0.01, hence s = 0.01
 
     ``phase_bins=K`` models a *timing code* for neuromorphic hardware: the spike is a binary event sent
     in one of K sub-step time slots, slot k = round(arg U * K / 2pi) mod K. A receiver that accumulates
@@ -397,7 +397,7 @@ class CLIF(nn.Module):
                 resets.append(r)
             H = torch.stack(fired)
             R = torch.stack(resets)
-        R = torch.cat([torch.zeros_like(R[:1]), R[:-1]])        # r_{t-1} enters u_pre_t
+            R = torch.cat([torch.zeros_like(R[:1]), R[:-1]])        # r_{t-1} enters u_pre_t
         u_pre = linear_recurrence(x - torch.polar(mag, phase).to(x.dtype) * R, mag=mag, phase=phase)
         m = complex_magnitude(u_pre)
         h_sur = spike(self._drive(u_pre, m), self.threshold, self.surrogate, self.sharpness)
@@ -437,7 +437,7 @@ class FastWeights(nn.Module):
     """P1b: Hebbian fast weights (plastic synapses that change while the network runs). From the presynaptic
     activity h_t the layer forms a key k_t, a value v_t and a query q_t (learned projections; keys and queries
     normalised per head) and updates, per head, a synaptic matrix
-      A_t = lambda A_{t-1} + v_t k_t^H        (k^H: conjugate transpose; real codes: k^T)
+        A_t = lambda A_{t-1} + v_t k_t^H        (k^H: conjugate transpose; real codes: k^T)
     and outputs the current y_t = A_t q_t. lambda (one per head, learnable) sets how fast the synapses forget.
     The projections are learned by BPTT; A itself is never a parameter. This is a linear-attention /
     fast-weight-programmer layer; with complex codes the stored associations are phase relations."""
@@ -489,10 +489,10 @@ class FastWeights(nn.Module):
     def _scan_chunks(self, k, q, v, beta, lam) -> torch.Tensor:
         """The recurrence of forward, C steps at a time. Inside a chunk that starts from state S (state before it),
         with 0-based steps t and write vectors u_t (u_t = beta_t (v_t - S_{t-1} k_t) for the delta rule):
-          S_{t-1} = lam^t S + sum_{j<t} lam^{t-1-j} u_j k_j^H
+            S_{t-1} = lam^t S + sum_{j<t} lam^{t-1-j} u_j k_j^H
         so the delta writes solve one unit lower-triangular system per chunk,
-          u_t + beta_t sum_{j<t} lam^{t-1-j} (k_j^H k_t) u_j = beta_t (v_t - lam^t S k_t),
-        and y_t = lam^{t+1} S q_t + sum_{j<=t} lam^{t-j} (k_j^H q_t) u_j,  S_end = lam^C S + sum_j lam^{C-1-j} u_j k_j^H.
+            u_t + beta_t sum_{j<t} lam^{t-1-j} (k_j^H k_t) u_j = beta_t (v_t - lam^t S k_t),
+        and  y_t = lam^{t+1} S q_t + sum_{j<=t} lam^{t-j} (k_j^H q_t) u_j,  S_end = lam^C S + sum_j lam^{C-1-j} u_j k_j^H.
         Only non-negative powers of lam appear. k, q, v: (T, B, H, d); beta: (T, B, H) or None; lam: (H,).
         Returns (T, B, H, d)."""
         T, B, H, d = v.shape
@@ -598,7 +598,7 @@ class LIF(nn.Module):
             self.leak_raw = nn.Parameter(raw)
         else:
             self.register_buffer("leak_raw", raw)
-        # I61 (adLIF, Bitter & Garner 2022 / Baronig et al. 2025): an adaptation current w coupled to the membrane,
+        # I61 (adLIF, Bittar & Garner 2022 / Baronig et al. 2025): an adaptation current w coupled to the membrane,
         #   u_t = alpha u_{t-1} + I_t - w_{t-1},   w_t = beta_w w_{t-1} + a u_{t-1} + b z_{t-1}
         # (u_{t-1}: membrane after reset). With alpha = beta_w = r cos(omega), a = r^2 sin^2(omega), b = 0 this is exactly
         # the subthreshold dynamics of a cLIF neuron with |beta| = r, rotation omega, real input and spikes on Re U
@@ -777,7 +777,7 @@ class LIF(nn.Module):
                     v = v_pre - self.threshold * h
                     fired.append(h)
                 H = torch.stack(fired)
-            R = torch.cat([torch.zeros_like(H[:1]), H[:-1]]) * self.threshold
+                R = torch.cat([torch.zeros_like(H[:1]), H[:-1]]) * self.threshold
             xc = torch.complex(x - beta * R, torch.zeros_like(x))
             v_pre = linear_recurrence(xc, mag=beta.to(x.dtype), phase=torch.zeros_like(beta).to(x.dtype)).real
             h_sur = spike(v_pre, self.threshold, self.surrogate, self.sharpness)
@@ -814,10 +814,10 @@ class ComplexLeakyRNN(nn.Module):
         self.bias = nn.Parameter(torch.full((num_features,), -0.5))   # modReLU bias
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        u = linear_recurrence(x, mag=torch.sigmoid(self.leak_mag_raw).to(x.dtype),
-                              phase=self.leak_phase.to(x.dtype))   # no reset: linear, parallel
+        u = linear_recurrence(x, mag=torch.sigmoid(self.leak_mag_raw).to(x.real.dtype),
+                              phase=self.leak_phase.to(x.real.dtype))   # no reset: linear, parallel
         m = complex_magnitude(u)
-        # modReLU: the 1e-6 keeps d(u/|u|)/du bounded when |u| -> 0 (otherwise gradients explode)
+        # modReLU; the 1e-6 keeps d(u/|u|)/du bounded when |u| -> 0 (otherwise gradients explode)
         out = torch.relu(m + self.bias) / (m + 1e-6) * u
         return out, u, torch.zeros_like(out.real)
 
@@ -825,8 +825,8 @@ class ComplexLeakyRNN(nn.Module):
 class LRU(nn.Module):
     """Linear Recurrent Unit (Orvieto et al., 2023), the non-spiking complex-diagonal SSM baseline.
 
-      h_t = lambda * h_{t-1} + gamma * (B x_t),   lambda = exp(-exp(nu) + j theta)
-      y_t = Re(C h_t) + D x_t
+        h_t = lambda * h_{t-1} + gamma * (B x_t),   lambda = exp(-exp(nu) + j theta)
+        y_t = Re(C h_t) + D x_t
     with |lambda| initialised uniformly on the ring [r_min, r_max] and gamma = sqrt(1 - |lambda|^2).
     """
 
@@ -878,7 +878,7 @@ class GatedRNN(nn.Module):
 class PRF(nn.Module):
     """Parallel Resonate-and-Fire neuron (Huang et al., arXiv 2410.03530, Eq. 19/27):
 
-      u_t = exp(Delta (-1/tau + j theta)) u_{t-1} + Delta c_t,   s_t = H(Re u_t - V_th)
+        u_t = exp(Delta (-1/tau + j theta)) u_{t-1} + Delta c_t,   s_t = H(Re u_t - V_th)
 
     complex state, real input current c_t, binary spikes, no reset (computed by FFT convolution).
     Per-neuron theta ~ U(0, theta_max) and log Delta ~ U(log dt_min, log dt_max) (both learnable); tau fixed
@@ -910,8 +910,8 @@ class PRF(nn.Module):
 class CSiLIF(nn.Module):
     """C-SiLIF neuron of REACT (Keime et al., arXiv 2609.19204, Eq. 2-5; from Fabre et al. 2026):
 
-      u_k = alpha u_{k-1} + b z_k,   alpha = exp((-e^{lambda_re} + j lambda_im) e^{rho} Delta t),
-      s_k = H(2 Re u_k - theta)
+        u_k = alpha u_{k-1} + b z_k,   alpha = exp((-e^{lambda_re} + j lambda_im) e^{rho} Delta t),
+        s_k = H(2 Re u_k - theta)
 
     complex state, complex input gain b, binary spikes, learnable threshold, no reset (FFT convolution).
     Initialisation as in the paper: e^{lambda_re} = 0.5, lambda_im shared, e^{rho} log-uniform in
