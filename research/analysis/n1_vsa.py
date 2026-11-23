@@ -6,11 +6,11 @@
 A record stores M facts as a superposition of bound pairs, r = sum_i role_i (x) filler_i (e.g. colour (x) red +
 shape (x) round + ...). A query unbinds one role and returns the most similar symbol of a codebook of F fillers.
 Codes of N "neurons":
-  fhrr    : unit phasors e^{j theta}, theta ~ U(0, 2 pi). bind = elementwise product (phases add), unbind = product
-            with the conjugate (exact inverse), similarity Re<a, b> / N  (Plate's FHRR)
-  phase_K : phasors with K phase levels: the K-slot timing code of E-HW. K = 2 is the bipolar +-1 code
-            (bind = elementwise product, its own inverse)
-  hrr     : real Gaussian N(0, 1/N). bind = circular convolution, unbind = circular correlation (approximate inverse)
+  fhrr     : unit phasors e^{j theta}, theta ~ U(0, 2 pi). bind = elementwise product (phases add), unbind = product
+             with the conjugate (exact inverse), similarity Re<a, b> / N  (Plate's FHRR)
+  phase_K  : phasors with K phase levels: the K-slot timing code of E-HW. K = 2 is the bipolar +-1 code
+             (bind = elementwise product, its own inverse)
+  hrr      : real Gaussian N(0, 1/N). bind = circular convolution, unbind = circular correlation (approximate inverse)
 Comparisons at equal resources:
   (a) equal neurons N;
   (b) equal real numbers: a complex neuron holds 2 reals, so fhrr with N neurons vs bipolar / hrr with 2N;
@@ -33,8 +33,8 @@ from pathlib import Path
 import torch
 
 OUT = Path(__file__).resolve().parents[1] / "results" / "n1_vsa"
-F = 1000              # fillers in the codebook
-UNSTORED = 200        # role queries that were never stored (for the "don't know" test)
+F = 1000          # fillers in the codebook
+UNSTORED = 200    # role queries that were never stored (for the "don't know" test)
 
 
 def make_codes(kind: str, n: int, count: int, g: torch.Generator) -> torch.Tensor:
@@ -84,8 +84,8 @@ def trial(kind: str, n: int, m: int, seed: int) -> dict:
     stored, unstored = roles[:m], roles[m:]
     fill = torch.randint(0, F, (m,), generator=g)
     record = bind(kind, stored, codebook[fill]).sum(0, keepdim=True)
-    s_in = similarity(kind, unbind(kind, record, stored), codebook)            # (m, F)
-    s_out = similarity(kind, unbind(kind, record, unstored), codebook)         # (UNSTORED, F)
+    s_in = similarity(kind, unbind(kind, record, stored), codebook)          # (m, F)
+    s_out = similarity(kind, unbind(kind, record, unstored), codebook)       # (UNSTORED, F)
     acc = (s_in.argmax(-1) == fill).double().mean().item()
     top_in, top_out = s_in.max(-1).values, s_out.max(-1).values
     return {"acc": acc, "auroc": auroc(top_in, top_out), "top_in": top_in.mean().item(), "top_out": top_out.mean().item()}
