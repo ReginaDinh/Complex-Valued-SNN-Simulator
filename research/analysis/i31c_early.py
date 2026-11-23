@@ -8,7 +8,7 @@ of the I21 recipe (same seeds and data). Every 50 steps, on a fixed probe batch 
   probe_acc       accuracy
   key_overlap     mean |<k_i, k_j>| of the keys at the true write times (experiments.ep1b.key_stats)
   query_contrast  query match to the queried key minus match to the other keys
-  grad_k / grad_in gradient norms of the key projection and of the input layer on the training batch
+  grad_k / grad_in  gradient norms of the key projection and of the input layer on the training batch
 Prediction written before running: already at initialisation the rotating network's keys overlap less (traces of
 earlier pairs dephase), its query contrast and accuracy rise earlier, and its key-projection gradients are larger.
 """
