@@ -92,8 +92,8 @@ def main(out: Path, seeds: int = 10, workers: int = 10, cells=("rot",), also=())
     groups = [(c, name) for c in order for name in SETTINGS if any(r["cell"] == c and r["setting"] == name for r in rows)]
     L = ["# N10 / N12: memory (r) and rotation (omega) of the hidden neurons after training (selected settings, pooled over seeds)", "",
          "|omega| quantiles 5 / 50 / 95%; pile-up gain 1/|1 - lambda| (median / 95% / max) vs 1/(1 - r) without rotation.", "",
-         "| model | setting | seeds | stage | \|omega\| q05 / q50 / q95 | share \|omega\| < 0.05 | gain 1/\|1-\lambda\| q50 / q95 / max | 1/(1-r) q50 / q95 | r q05 / q50 / q95 |",
-         "|---|---|---|---|---|---|---|---|---|---|"]
+         "| model | setting | seeds | stage | \\|omega\\| q05 / q50 / q95 | share \\|omega\\| < 0.05 | gain 1/\\|1-λ\\| q50 / q95 / max | 1/(1-r) q50 / q95 | r q05 / q50 / q95 |",
+         "|---|---|---|---|---|---|---|---|---|"]
     summary, repro, finals = {}, {}, {}
     for c, name in groups:
         rs = sorted((r for r in rows if r["cell"] == c and r["setting"] == name), key=lambda r: r["seed"])
@@ -120,8 +120,8 @@ def main(out: Path, seeds: int = 10, workers: int = 10, cells=("rot",), also=())
                 for r in rs if r["key"] in ref]
         repro[f"{c} | {name}"] = f"{sum(same)}/{len(same)} identical (of {len(rs)} runs; {len(rs) - len(same)} without an original)"
     # joint view: rotation and pile-up gain per memory band (r) at the end, pooled over seeds
-    L += ["", "By memory band at the end (pooled over seeds): share of neurons, median |omega|, share |omega| < 0.05, pile-up gain.", "",
-          "| model | setting | r band | share of neurons | median \|omega\| | share \|omega\| < 0.05 | gain 1/\|1-\lambda\| median / max | 1/(1-r) median |",
+    L += ["", "By memory band at the end (pooled over seeds): share of neurons, median |omega|, share |omega| < 0.05, pile-up gain", "",
+          "| model | setting | r band | share of neurons | median \\|omega\\| | share \\|omega\\| < 0.05 | gain 1/\\|1-λ\\| median / max | 1/(1-r) median |",
           "|---|---|---|---|---|---|---|---|"]
     for (c, name), fin in finals.items():
         rr = torch.cat([p["r"] for p in fin]).double()
