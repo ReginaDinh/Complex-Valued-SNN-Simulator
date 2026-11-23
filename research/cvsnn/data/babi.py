@@ -13,12 +13,12 @@ import re
 Q_STEPS, TAIL = 2, 3
 
 
-def tokens(text:str) -> list[str]:
+def tokens(text: str) -> list[str]:
     return re.findall(r"[a-z]+", text.lower())
 
 
-def steps_of(n_sequences:int) -> int:
-    return 2 * n_sequences + Q_STEPS + TAIL
+def steps_of(n_sentences: int) -> int:
+    return 2 * n_sentences + Q_STEPS + TAIL
 
 
 def encode_batch(samples: list[dict], vocab_size: int):
