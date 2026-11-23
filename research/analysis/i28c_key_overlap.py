@@ -39,22 +39,22 @@ def analyse(path: Path, seed: int) -> dict:
 
     ck = torch.load(path, weights_only=False)
     task, cplx = ck["task"], ck["model"]["kind"] == "cvsnn"
-    x, theta, y, pos = serial_recall_batch(1024, generator=torch.Generator().manual_seed(20_000 + seed), **task)  # the I28c test batch
+    x, theta, y, pos = serial_recall_batch(1024, generator=torch.Generator().manual_seed(20_000 + seed), **task)   # the I28c test batch
     xin = network_input(x, theta, cplx)
     model = SequenceClassifier(xin.shape[-1], task["n_symbols"], ModelConfig(**ck["model"]))
     model.load_state_dict(ck["state"])
     model.eval()
     with torch.no_grad():
         lg, _ = model(xin, theta=theta)
-    k, q, beta = model.fw.last["k"], model.fw.last["q"], model.fw.last["beta"]  # (T, B, H, d), (T, B, H)
+    k, q, beta = model.fw.last["k"], model.fw.last["q"], model.fw.last["beta"]   # (T, B, H, d), (T, B, H)
     n_items, cyc, slot, tail = task["items"], task["cycle_slots"], task["slot"], task["tail"]
-    K = torch.stack([k[n * slot] for n in range(n_items)], 1)                  # (B, items, H, d)
-    G = inner(K.unsqueeze(2), K.unsqueeze(1))                                  # (B, items, items, H)
+    K = torch.stack([k[n * slot] for n in range(n_items)], 1)                   # (B, items, H, d)
+    G = inner(K.unsqueeze(2), K.unsqueeze(1))                                   # (B, items, items, H)
     alias = [(n, n + cyc) for n in range(n_items - cyc)]
     same = [(n, m) for n in range(cyc) for m in range(cyc) if n != m]
     cross = [(n, m) for n in range(cyc) for m in range(cyc, n_items) if m - cyc != n]
     mean_pairs = lambda pairs: torch.stack([G[:, i, j] for i, j in pairs]).mean().item()
-    qr = q[-tail:]                                                             # (tail, B, H, d), same input on every read-out step
+    qr = q[-tail:]                                                               # (tail, B, H, d), same input on every read-out step
     b = torch.arange(x.shape[1])
     wrapped = (pos < n_items - cyc) | (pos >= cyc)
     partner = torch.where(pos < cyc, pos + cyc, pos - cyc)
@@ -63,7 +63,7 @@ def analyse(path: Path, seed: int) -> dict:
     gate_idx = [n * slot for n in range(n_items) if n < n_items - cyc or n >= cyc]
     # cue probe: at the query, keep the theta phase but swap (or remove) the cycle cue; on samples whose two items of
     # the same phase differ, which of them does the network answer?
-    items = torch.stack([x[n * slot, :, :task["n_symbols"]].argmax(-1) for n in range(n_items)], 1)  # (B, items)
+    items = torch.stack([x[n * slot, :, :task["n_symbols"]].argmax(-1) for n in range(n_items)], 1)   # (B, items)
     pi = partner.clamp(max=n_items - 1)
     diff = wrapped & (items[b, pos] != items[b, pi])
     probe = {}
