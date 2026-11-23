@@ -4,17 +4,17 @@ parameter-matched non-spiking GRU / LSTM references (N19).
     cd research && .venv/bin/python -m analysis.n20_ops [out_dir]
 
 Counting model (event-driven hardware; the same rules for every network):
-  - a binary spike entering a synapse costs one accumulate (AC); a real-valued input costs one multiply-accumulate (MAC);
-  - zero inputs are skipped for every network (input sparsity counted from the data, the same for all);
-  - spiking hidden layer, per step: input W x_t (nnz(x_t) * N MAC); neuron update (cLIF: complex multiply by lambda = 4 MAC
-    + 1 AC per neuron; LIF: 1 MAC + 1 AC);
-  - GRU / LSTM, per step: input part nnz(x_t) * G*H MAC; recurrent part G*H*H MAC (dense, every step); gate arithmetic
-    (GRU 4H, LSTM 5H MAC) (G = 3 for GRU, 4 for LSTM);
-  - plastic synapse (identical in every network): key / value / query / gate projections from the hidden output (spikes:
-    nnz(h_t) * (3*heads*d + heads) AC; GRU / LSTM: H * (3*heads*d + heads) MAC); key and query normalisation
-    (4*heads*d MAC); gated delta-rule write, decay and read (4*heads*d^2 MAC);
-  - read-out: from the hidden output (spikes: nnz(h_t) * n_out AC; GRU / LSTM: H * n_out MAC), from the plastic-synapse
-    read (heads*d * n_out MAC), leaky read-out units (n_out MAC).
+- a binary spike entering a synapse costs one accumulate (AC); a real-valued input costs one multiply-accumulate (MAC);
+- zero inputs are skipped for every network (input sparsity counted from the data, the same for all);
+- spiking hidden layer, per step: input W x_t (nnz(x_t) * N MAC); neuron update (cLIF: complex multiply by lambda = 4 MAC
+  + 1 AC per neuron; LIF: 1 MAC + 1 AC);
+- GRU / LSTM, per step: input part nnz(x_t) * G*H MAC; recurrent part G*H*H MAC (dense, every step); gate arithmetic
+  (GRU 4H, LSTM 5H MAC) (G = 3 for GRU, 4 for LSTM);
+- plastic synapse (identical in every network): key / value / query / gate projections from the hidden output (spikes:
+  nnz(h_t) * (3*heads*d + heads) AC; GRU / LSTM: H * (3*heads*d + heads) MAC); key and query normalisation
+  (4*heads*d MAC); gated delta-rule write, decay and read (4*heads*d^2 MAC);
+- read-out: from the hidden output (spikes: nnz(h_t) * n_out AC; GRU / LSTM: H * n_out MAC), from the plastic-synapse
+  read (heads*d * n_out MAC), leaky read-out units (n_out MAC).
 Nonlinearities (sigmoid, tanh, spike threshold) are not counted. Energy proxy: 4.6 pJ per 32-bit float MAC and 0.9 pJ per
 AC, the 45 nm figures commonly quoted from Horowitz (2014); a rough guide only.
 Spike counts: the trained models saved by N10 / N12 (selected settings, 10 seeds), on the test data of all five tasks.
@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 E_MAC, E_AC = 4.6e-12, 0.9e-12
 HEADS, D = 2, 11
 BASE = {"cand_long_fw003": "cand_long", "cand_longnorot_fw001": "cand_long_norot", "lif_fw2_d11_fw001": "lif_fw2_d11"}
-ACC = {"mnist": {"rotating cLIF": 0.656, "no-rotation cLIF": 0.614, "LIF (long)": 0.621, "GRU": 0.716, "LSTM": 0.686},
+ACC = {"mnist": {"rotating cLIF": 0.656, "no-rotation cLIF": 0.614, "LIF (long)": 0.621, "GRU": 0.716, "LSTM": 0.685},
        "shd": {"rotating cLIF": 0.682, "no-rotation cLIF": 0.604, "LIF (long)": 0.614, "GRU": 0.758, "LSTM": 0.736}}
 
 
@@ -78,8 +78,8 @@ def spiking_counts(row: dict, x: torch.Tensor, n_out: int) -> dict:
             caught["spikes"] += float(caught["fire"].sum())
     T, B, _ = x.shape
     N = 120
-    nnz_x = float((x != 0).sum()) / B                  # input non-zeros per sample (whole sequence)
-    spk = caught["spikes"] / B                         # hidden spikes per sample (whole sequence)
+    nnz_x = float((x != 0).sum()) / B            # input non-zeros per sample (whole sequence)
+    spk = caught["spikes"] / B                    # hidden spikes per sample (whole sequence)
     cplx = isinstance(model.neurons[0], CLIF)
     mac = nnz_x * N + T * N * (4 if cplx else 1) + T * (4 * HEADS * D + 4 * HEADS * D * D) + T * (HEADS * D * n_out + n_out)
     ac = T * N + spk * (3 * HEADS * D + HEADS) + spk * n_out
@@ -92,7 +92,7 @@ def rnn_counts(cell: str, H: int, x: torch.Tensor, n_out: int) -> dict:
     nnz_x = float((x != 0).sum()) / B
     mac = nnz_x * G * H + T * (G * H * H + elem * H) + T * H * (3 * HEADS * D + HEADS) + T * (4 * HEADS * D + 4 * HEADS * D * D) \
         + T * (H * n_out + HEADS * D * n_out + n_out)
-    return {"mac": mac, "ac": 0.0, "spike_rate": None, "nnz_x": nnz_x}
+    return {"mac": mac, "ac": 0.0, "nnz_x": nnz_x}
 
 
 def main(out: Path) -> None:
