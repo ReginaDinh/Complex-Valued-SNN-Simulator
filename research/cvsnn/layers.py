@@ -108,14 +108,14 @@ def linear_recurrence(x: torch.Tensor, beta: torch.Tensor | None = None, *, mag:
     T = x.shape[0]
     if mag is None:
         mag, phase = beta.abs(), torch.angle(beta)
-    k = torch.arange(T, device=x.device, dtype=mag.dtype).unsqueeze(1)            # (T, 1)
+    k = torch.arange(T, device=x.device, dtype=mag.dtype).unsqueeze(1)             # (T, 1)
     # beta^k = exp(k (log|beta| + j phase)): a single complex exp has a well-defined gradient even when
     # |beta|^k underflows to 0 (torch.polar's backward divides by the magnitude -> 0/0 = NaN)
-    log_beta = torch.complex(torch.log(mag.clamp_min(1e-12)), phase).unsqueeze(0)   # (1, N)
-    kernel = torch.exp(k.to(log_beta.dtype) * log_beta)                             # (T, N)
+    log_beta = torch.complex(torch.log(mag.clamp_min(1e-12)), phase).unsqueeze(0)        # (1, N)
+    kernel = torch.exp(k.to(log_beta.dtype) * log_beta)                                 # (T, N)
     n = 2 * T
     X = torch.fft.fft(x, n=n, dim=0)
-    K = torch.fft.fft(kernel.to(x.dtype), n=n, dim=0).unsqueeze(1)                  # (n, 1, N)
+    K = torch.fft.fft(kernel.to(x.dtype), n=n, dim=0).unsqueeze(1)                    # (n, 1, N)
     return torch.fft.ifft(X * K, dim=0)[:T]
 
 
@@ -157,7 +157,7 @@ class Urgency(nn.Module):
       'damping'  : |beta_t| = |beta| exp(-c g_t)   (c >= 0; the state settles as the deadline approaches)
       'threshold': V_th,t = V_th (1 - c g_t)       (0 <= c <= 0.9; collapsing bound)
       'gain'     : I_t (1 + c g_t)                 (c >= 0; growing urgency signal)
-      'damping_const': |beta_t| = |beta| exp(-c)       (control: the same extra leak at every step, no deadline schedule)"""
+      'damping_const': |beta_t| = |beta| exp(-c)   (control: the same extra leak at every step, no deadline schedule)"""
 
     KINDS = ("damping", "threshold", "gain", "damping_const")
 
@@ -187,8 +187,8 @@ class Urgency(nn.Module):
 class CLIF(nn.Module):
     """Complex leaky integrate-and-fire neuron (cLIF), unrolled over time (full BPTT).
 
-        U_pre[t] = beta * U[t-1] + I[t],        beta = |beta| e^{j omega}
-        S[t]     = H(|U_pre[t]| - V_th) * e^{j arg U_pre[t]}       (spike_mode="phasor")
+        U_pre[t] = beta * U[t-1] + I[t],          beta = |beta| e^{j omega}
+        S[t]     = H(|U_pre[t]| - V_th) * e^{j arg U_pre[t]}      (spike_mode="phasor")
                    H * e^{j q_K(arg U_pre[t])}                     (phasor + phase_bins=K)
                    H(|U_pre[t]| - V_th) * U_pre[t]                 (spike_mode="graded")
                    H(|U_pre[t]| - V_th)  or  H(Re U_pre[t] - V_th) (spike_mode="binary", binary_on="mag" | "re")
@@ -198,7 +198,7 @@ class CLIF(nn.Module):
         within the rotation still reflects the phase, at the resolution of one step.
         soft reset: U[t] = U_pre[t] - V_th * H * e^{j arg U_pre[t]}  (keeps the phase)
         hard reset: U[t] = U_pre[t] * (1 - H)
-        no reset:   U[t] = U_pre[t]  (linear state; spikes are only a read-out, as in PRF / C-SiLIF;
+        no reset:   U[t] = U_pre[t]   (linear state; spikes are only a read-out, as in PRF / C-SiLIF;
                     computed for all t at once by FFT convolution)
         brf reset:  no subtraction. A refractory trace q[t] = g q[t-1] + H raises the threshold to V_th + q
                     and temporarily increases damping, beta_t = beta * exp(-s q[t-1]) (phase unchanged),
@@ -285,7 +285,7 @@ class CLIF(nn.Module):
                 m_mag, m_phase = init_leak(n_mem, leak_mag, leak_phase, leak_mag_range, leak_phase_range, phase_dist, phase_bits)
                 raw_mag[num_features - n_mem:], raw_phase[num_features - n_mem:] = m_mag, m_phase
             mask = torch.ones(num_features)
-            mask[num_features - n_mem:] = 0.0                  # 1 = processing neuron (resets), 0 = memory neuron
+            mask[num_features - n_mem:] = 0.0            # 1 = processing neuron (resets), 0 = memory neuron
             self.register_buffer("reset_mask", mask)
         if learn_leak:
             self.leak_mag_raw = nn.Parameter(raw_mag)
@@ -397,7 +397,7 @@ class CLIF(nn.Module):
                 resets.append(r)
             H = torch.stack(fired)
             R = torch.stack(resets)
-            R = torch.cat([torch.zeros_like(R[:1]), R[:-1]])        # r_{t-1} enters u_pre_t
+            R = torch.cat([torch.zeros_like(R[:1]), R[:-1]])      # r_{t-1} enters u_pre_t
         u_pre = linear_recurrence(x - torch.polar(mag, phase).to(x.dtype) * R, mag=mag, phase=phase)
         m = complex_magnitude(u_pre)
         h_sur = spike(self._drive(u_pre, m), self.threshold, self.surrogate, self.sharpness)
@@ -437,7 +437,7 @@ class FastWeights(nn.Module):
     """P1b: Hebbian fast weights (plastic synapses that change while the network runs). From the presynaptic
     activity h_t the layer forms a key k_t, a value v_t and a query q_t (learned projections; keys and queries
     normalised per head) and updates, per head, a synaptic matrix
-        A_t = lambda A_{t-1} + v_t k_t^H        (k^H: conjugate transpose; real codes: k^T)
+        A_t = lambda A_{t-1} + v_t k_t^H          (k^H: conjugate transpose; real codes: k^T)
     and outputs the current y_t = A_t q_t. lambda (one per head, learnable) sets how fast the synapses forget.
     The projections are learned by BPTT; A itself is never a parameter. This is a linear-attention /
     fast-weight-programmer layer; with complex codes the stored associations are phase relations."""
@@ -496,8 +496,8 @@ class FastWeights(nn.Module):
         Only non-negative powers of lam appear. k, q, v: (T, B, H, d); beta: (T, B, H) or None; lam: (H,).
         Returns (T, B, H, d)."""
         T, B, H, d = v.shape
-        K, Q, V = (z.permute(1, 2, 0, 3) for z in (k, q, v))                      # (B, H, T, d)
-        bt = None if beta is None else beta.permute(1, 2, 0).to(V.dtype)          # (B, H, T)
+        K, Q, V = (z.permute(1, 2, 0, 3) for z in (k, q, v))                     # (B, H, T, d)
+        bt = None if beta is None else beta.permute(1, 2, 0).to(V.dtype)        # (B, H, T)
         loglam = torch.log(lam).view(1, H, 1, 1)
         S = torch.zeros(B, H, d, d, dtype=V.dtype, device=V.device)
         tr = lambda z: z.transpose(-1, -2)
@@ -506,14 +506,14 @@ class FastWeights(nn.Module):
             Kc, Qc, Vc = K[:, :, s0:s0 + self.chunk], Q[:, :, s0:s0 + self.chunk], V[:, :, s0:s0 + self.chunk]
             C = Kc.shape[2]
             t = torch.arange(C, dtype=lam.dtype, device=V.device)
-            diff = t.view(-1, 1) - t.view(1, -1)                                  # t - j
-            pw = lambda e, mask: (torch.exp(e * loglam) * mask).to(V.dtype)       # lam^e where mask, else 0
-            L1 = pw(diff - 1, (diff >= 1).to(lam.dtype))                          # lam^{t-1-j}, j < t
-            L2 = pw(diff, (diff >= 0).to(lam.dtype))                              # lam^{t-j},   j <= t
-            p0 = torch.exp(t.view(1, 1, -1, 1) * loglam).to(V.dtype)              # lam^t
+            diff = t.view(-1, 1) - t.view(1, -1)                                 # t - j
+            pw = lambda e, mask: (torch.exp(e * loglam) * mask).to(V.dtype)      # lam^e where mask, else 0
+            L1 = pw(diff - 1, (diff >= 1).to(lam.dtype))                         # lam^{t-1-j}, j < t
+            L2 = pw(diff, (diff >= 0).to(lam.dtype))                             # lam^{t-j},   j <= t
+            p0 = torch.exp(t.view(1, 1, -1, 1) * loglam).to(V.dtype)             # lam^t
             Kh = torch.conj(Kc) if self.complex_ else Kc
             if self.rule == "delta":
-                KK = Kc @ tr(Kh)                                                  # [t, j] = k_j^H k_t
+                KK = Kc @ tr(Kh)                                                 # [t, j] = k_j^H k_t
                 b = torch.ones_like(Vc[..., 0]) if bt is None else bt[:, :, s0:s0 + C]
                 Lmat = torch.eye(C, dtype=V.dtype, device=V.device) + b.unsqueeze(-1) * KK * L1
                 R = b.unsqueeze(-1) * (Vc - p0 * (Kc @ tr(S)))
@@ -521,7 +521,7 @@ class FastWeights(nn.Module):
             else:
                 U = Vc if bt is None else bt[:, :, s0:s0 + C].unsqueeze(-1) * Vc
             ys.append(p0 * torch.exp(loglam).to(V.dtype) * (Qc @ tr(S)) + (Qc @ tr(Kh) * L2) @ U)
-            w = torch.exp((C - 1 - t).view(1, 1, -1, 1) * loglam).to(V.dtype)     # lam^{C-1-j}
+            w = torch.exp((C - 1 - t).view(1, 1, -1, 1) * loglam).to(V.dtype)   # lam^{C-1-j}
             S = torch.exp(C * loglam).to(V.dtype) * S + tr(U * w) @ Kh
         return torch.cat(ys, 2).permute(2, 0, 1, 3)
 
@@ -545,9 +545,9 @@ class FastWeights(nn.Module):
         lam = torch.sigmoid(self.decay_raw).view(1, H, 1, 1)
         if self.gate is not None:
             mag = torch.sqrt(h.real ** 2 + h.imag ** 2 + 1e-12) if torch.is_complex(h) else h
-            beta = torch.sigmoid(self.gate(mag))              # (T, B, H)
+            beta = torch.sigmoid(self.gate(mag))                      # (T, B, H)
         self.last = {"k": k.detach(), "q": q.detach(), "beta": beta.detach() if self.gate is not None else None,   # for analysis (I21)
-                     "v": v.detach(), "k_raw": k_raw.detach(), "q_raw": q_raw.detach()}                           # (I28, before the theta tag)
+                     "v": v.detach(), "k_raw": k_raw.detach(), "q_raw": q_raw.detach()}                                 # (I28, before the theta tag)
         if getattr(self, "keep_live", False):   # I56 (mechanism test): the keys with their graph, for a training penalty
             self.live_k = k
         if self.chunk:
@@ -608,7 +608,7 @@ class LIF(nn.Module):
         self.adapt_style = (adapt or {}).get("style", "matched")
         if self.adapt and self.adapt_style == "bittar":
             # I61b: the standard adLIF of Bittar & Garner (2022), also the adLIF baseline of Baronig et al. (2025):
-            #   u_t = alpha (u_{t-1} - theta s_{t-1}) + (1 - alpha) (g I_t - w_{t-1}),   w_t = beta (w_{t-1}) + (1 - beta) (a u_{t-1} + b s_{t-1})
+            #   u_t = alpha (u_{t-1} - theta s_{t-1}) + (1 - alpha) (g I_t - w_{t-1}),  w_t = beta (w_{t-1}) + (1 - beta) (a u_{t-1} + b s_{t-1})
             # with alpha in [e^-1/5, e^-1/25], beta in [e^-1/30, e^-1/120], a in [-1, 1], b in [0, 2] (clamped), initialised
             # uniformly in those ranges. g = 1 / (1 - alpha_init) is a fixed per-neuron input gain that undoes the (1 - alpha)
             # input scaling at initialisation, so that the input weights start at the same scale as the LIF (otherwise
@@ -642,7 +642,7 @@ class LIF(nn.Module):
             # I65: balanced resonate-and-fire (Higuchi, Kairat, Bohte & Otte 2024), complex state u = x + i y, forward Euler
             # with step delta (here delta = 1 step, parameters per step):
             #   u_t = u_{t-1} + delta ((b_t + i omega) u_{t-1} + I_t),   b_t = p(omega) - b' - q_{t-1},
-            #   p(omega) = (-1 + sqrt(1 - (delta omega)^2)) / delta      (divergence boundary: |1 + delta (p + i omega)| = 1)
+            #   p(omega) = (-1 + sqrt(1 - (delta omega)^2)) / delta     (divergence boundary: |1 + delta (p + i omega)| = 1)
             #   s_t = H(Re u_t - theta - q_{t-1}),   q_t = gamma q_{t-1} + s_t,  gamma = 0.9   (no reset: smooth reset + refractory)
             # omega and b' are learned (|.| taken in the forward pass, as in their code); initialised as their SHD run
             # (github.com/AdaptiveAILab/brf-neurons, experiments/SHD/shd_train.py: omega ~ U(5, 10), b' ~ U(2, 3), delta = 0.01;
@@ -662,7 +662,7 @@ class LIF(nn.Module):
             om = float(adapt.get("omega", 0.15))
             c = r * math.cos(om)
             self.leak_raw = nn.Parameter(torch.log(c / (1 - c))) if learn_leak else self.leak_raw   # alpha
-            self.wleak_raw = nn.Parameter(torch.log(c / (1 - c)))                                  # beta_w
+            self.wleak_raw = nn.Parameter(torch.log(c / (1 - c)))                                    # beta_w
             self.a = nn.Parameter((r * math.sin(om)) ** 2)
             self.b = nn.Parameter(torch.full_like(r, float(adapt.get("b", 0.0))))
 
@@ -703,7 +703,7 @@ class LIF(nn.Module):
                 u = u_hat - self.threshold * (s.detach() if self.detach_reset else s)
             else:
                 u = u_hat
-            w = beta * w + (1 - beta) * (a * u + b * s)          # symplectic Euler: the updated (reset) membrane
+            w = beta * w + (1 - beta) * (a * u + b * s)        # symplectic Euler: the updated (reset) membrane
             spikes.append(s)
             pots.append(u_hat)
         z = torch.stack(spikes)
@@ -744,7 +744,7 @@ class LIF(nn.Module):
         for t in range(T):
             u_pre = alpha * u + x[t] - w
             h = spike(u_pre, self.threshold, self.surrogate, self.sharpness)
-            w = beta_w * w + self.a * u + self.b * z             # uses u_{t-1} (after reset) and z_{t-1}
+            w = beta_w * w + self.a * u + self.b * z          # uses u_{t-1} (after reset) and z_{t-1}
             if self.reset == "soft":
                 sub = self.threshold * h
                 u = u_pre - (sub.detach() if self.detach_reset else sub)
@@ -811,7 +811,7 @@ class ComplexLeakyRNN(nn.Module):
         super().__init__()
         self.leak_mag_raw = nn.Parameter(torch.full((num_features,), _logit(leak_mag)))
         self.leak_phase = nn.Parameter(torch.full((num_features,), float(leak_phase)))
-        self.bias = nn.Parameter(torch.full((num_features,), -0.5))   # modReLU bias
+        self.bias = nn.Parameter(torch.full((num_features,), -0.5))  # modReLU bias
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         u = linear_recurrence(x, mag=torch.sigmoid(self.leak_mag_raw).to(x.real.dtype),
@@ -910,7 +910,7 @@ class PRF(nn.Module):
 class CSiLIF(nn.Module):
     """C-SiLIF neuron of REACT (Keime et al., arXiv 2609.19204, Eq. 2-5; from Fabre et al. 2026):
 
-        u_k = alpha u_{k-1} + b z_k,   alpha = exp((-e^{lambda_re} + j lambda_im) e^{rho} Delta t),
+        u_k = alpha u_{k-1} + b z_k,  alpha = exp((-e^{lambda_re} + j lambda_im) e^{rho} Delta t),
         s_k = H(2 Re u_k - theta)
 
     complex state, complex input gain b, binary spikes, learnable threshold, no reset (FFT convolution).
