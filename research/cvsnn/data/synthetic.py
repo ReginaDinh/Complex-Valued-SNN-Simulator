@@ -98,7 +98,7 @@ def delayed_order_batch(
     T = window + delay + tail
     k = channels // symbols
     a = torch.randint(0, symbols, (batch,), generator=g)
-    b = (a + torch.randint(1, symbols, (batch,), generator=g)) % symbols  # b != a
+    b = (a + torch.randint(1, symbols, (batch,), generator=g)) % symbols   # b != a
     t1 = torch.randint(0, window - 1, (batch,), generator=g)
     t2 = t1 + 1 + (torch.rand(batch, generator=g) * (window - 1 - t1).float()).long()  # t1 < t2 < window
     x = torch.zeros(T, batch, channels)
@@ -106,7 +106,7 @@ def delayed_order_batch(
     for s_vec, t_vec in ((a, t1), (b, t2)):
         for j in range(k):
             x[t_vec, idx, s_vec * k + j] = 1.0
-    pair = a * (symbols - 1) + torch.where(b > a, b - 1, b)  # index of ordered pair (a, b)
+    pair = a * (symbols - 1) + torch.where(b > a, b - 1, b)   # index of ordered pair (a, b)
     return x, pair
 
 
@@ -127,7 +127,7 @@ def binding_batch(
     Returns complex64 (T, B, 8)."""
     B = targets.shape[0]
     g = generator
-    cols = torch.stack([torch.randperm(4, generator=g)[:2] for _ in range(B)]).sort(-1).values     # (B, 2), ca < cb
+    cols = torch.stack([torch.randperm(4, generator=g)[:2] for _ in range(B)]).sort(-1).values      # (B, 2), ca < cb
     shps = torch.stack([torch.randperm(4, generator=g)[:2] for _ in range(B)]).sort(-1).values + 4
     phi1 = torch.rand(B, generator=g) * 2 * math.pi
     phi2 = phi1 + sep_min + torch.rand(B, generator=g) * (2 * math.pi - 2 * sep_min)
@@ -165,9 +165,9 @@ def assoc_recall_batch(
     g = generator
     T = window + delay + tail
     x = torch.zeros(T, batch, n_keys + n_vals + 1)
-    keys = torch.stack([torch.randperm(n_keys, generator=g)[:pairs] for _ in range(batch)])        # (B, P)
+    keys = torch.stack([torch.randperm(n_keys, generator=g)[:pairs] for _ in range(batch)])         # (B, P)
     vals = torch.randint(0, n_vals, (batch, pairs), generator=g)
-    times = torch.stack([torch.randperm(window, generator=g)[:pairs] for _ in range(batch)])       # (B, P)
+    times = torch.stack([torch.randperm(window, generator=g)[:pairs] for _ in range(batch)])        # (B, P)
     b = torch.arange(batch)
     for i in range(pairs):
         x[times[:, i], b, keys[:, i]] = 1.0
