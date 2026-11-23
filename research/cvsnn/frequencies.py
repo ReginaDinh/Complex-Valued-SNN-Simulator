@@ -1,27 +1,27 @@
 """Frequency sets for oscillator neurons (hypothesis H6): how the rotation angles omega_k (rad/step) of
 N neurons are chosen. Every set lies in [lo, hi].
 
-* uniform     : random, U(lo, hi)
-* log         : random, log-uniform (as in REACT; our default heterogeneous initialisation)
-* golden      : lo + (hi - lo) frac(k / phi), k = 1..N: the golden-angle sequence, built from one irrational
-                number. frac(k / phi) = k / phi - floor(k / phi), so any integer vector n with sum n_k = 0 and
-                sum n_k k = 0 gives sum n_k omega_k = -(hi - lo) sum n_k floor(k / phi): an exact relation, e.g.
-                omega_1 - omega_2 - omega_4 + omega_5 = 0 (a repeated pairwise difference).
-* independent : lo + (hi - lo) frac(sqrt(p_k)), p_k the k-th prime. Square roots of distinct primes are linearly
-                independent over Q (Besicovitch 1940); with rational lo and hi - lo there is no integer relation
-                among the omega_k and 2 pi (pi is transcendental).
-* geometric   : hi (lo / hi)^{k / (N - 1)}: a RoPE-style geometric ladder
-* harmonic    : equally spaced from lo to hi: rationally dependent (omega_1 - 2 omega_2 + omega_3 = 0) and the
-                joint code repeats after about 2 pi (N - 1) / (hi - lo) steps
-* quantized   : log-uniform, rounded to a b-bit phase register omega = 2 pi m / 2^b. On such hardware every
-                frequency is rational, so the joint code repeats exactly after 2^b steps; rounding can also
-                make neurons share a frequency.
-* zero        : omega = 0 for every neuron (no rotation: a leaky integrator; outside [lo, hi] on purpose)
-* sidon       : N distinct grid points m in the same range chosen to minimise the additive energy
-                #{(a, b, c, d): m_a - m_b = m_c - m_d}. A set where all pairwise differences differ (a Sidon set,
-                Golomb ruler) has no exact resonance omega_a - omega_b = omega_c - omega_d or omega_a + omega_b =
-                2 omega_c, and minimising the additive energy flattens the code crosstalk spectrum (it equals
-                the 4th moment of |mean_k e^{j D omega_k}| over D, by Parseval).
+* uniform      : random, U(lo, hi)
+* log          : random, log-uniform (as in REACT; our default heterogeneous initialisation)
+* golden       : lo + (hi - lo) frac(k / phi), k = 1..N: the golden-angle sequence, built from one irrational
+                 number. frac(k / phi) = k / phi - floor(k / phi), so any integer vector n with sum n_k = 0 and
+                 sum n_k k = 0 gives sum n_k omega_k = -(hi - lo) sum n_k floor(k / phi): an exact relation, e.g.
+                 omega_1 - omega_2 - omega_4 + omega_5 = 0 (a repeated pairwise difference).
+* independent  : lo + (hi - lo) frac(sqrt(p_k)), p_k the k-th prime. Square roots of distinct primes are linearly
+                 independent over Q (Besicovitch 1940); with rational lo and hi - lo there is no integer relation
+                 among the omega_k and 2 pi (pi is transcendental).
+* geometric    : hi (lo / hi)^{k / (N - 1)}: a RoPE-style geometric ladder
+* harmonic     : equally spaced from lo to hi: rationally dependent (omega_1 - 2 omega_2 + omega_3 = 0) and the
+                 joint code repeats after about 2 pi (N - 1) / (hi - lo) steps
+* quantized    : log-uniform, rounded to a b-bit phase register omega = 2 pi m / 2^b. On such hardware every
+                 frequency is rational, so the joint code repeats exactly after 2^b steps; rounding can also
+                 make neurons share a frequency.
+* zero         : omega = 0 for every neuron (no rotation: a leaky integrator; outside [lo, hi] on purpose)
+* sidon        : N distinct grid points m in the same range chosen to minimise the additive energy
+                 #{(a, b, c, d): m_a - m_b = m_c - m_d}. A set where all pairwise differences differ (a Sidon set,
+                 Golomb ruler) has no exact resonance omega_a - omega_b = omega_c - omega_d or omega_a + omega_b =
+                 2 omega_c, and minimising the additive energy flattens the code crosstalk spectrum (it equals
+                 the 4th moment of |mean_k e^{j D omega_k}| over D, by Parseval).
 """
 
 from __future__ import annotations
@@ -111,7 +111,7 @@ def frequency_set(kind: str, n: int, lo: float, hi: float, *, bits: int | None =
     if kind == "log":
         u = torch.rand(n, generator=generator, dtype=torch.float64)
         return torch.exp(math.log(lo) + u * (math.log(hi) - math.log(lo)))
-    if kind == "zero":    # no rotation: the neuron is a leaky integrator (control for "does rotation help memory?")
+    if kind == "zero":   # no rotation: the neuron is a leaky integrator (control for "does rotation help memory?")
         return torch.zeros(n, dtype=torch.float64)
     k = torch.arange(1, n + 1, dtype=torch.float64)
     if kind == "golden":
@@ -135,7 +135,7 @@ def frequency_set(kind: str, n: int, lo: float, hi: float, *, bits: int | None =
         base = lo * PHI ** torch.remainder(k - 1, rungs)
         u = torch.rand(n, generator=generator, dtype=torch.float64) * 2 - 1
         return (base * torch.exp(0.05 * u)).clamp(lo, hi)
-    if kind == "banded_strat": # I23c: as many shared random bands as the phi ladder has rungs, one drawn log-uniformly
+    if kind == "banded_strat":  # I23c: as many shared random bands as the phi ladder has rungs, one drawn log-uniformly
         # inside each of that many equal log-strata of [lo, hi] (even coverage, irregular spacing)
         rungs = int(math.floor(math.log(hi / lo) / math.log(PHI) + 1e-12)) + 1
         u = (torch.arange(rungs, dtype=torch.float64) + torch.rand(rungs, generator=generator, dtype=torch.float64)) / rungs
