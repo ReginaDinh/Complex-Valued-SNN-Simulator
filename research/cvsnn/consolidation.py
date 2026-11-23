@@ -36,7 +36,7 @@ class SynapticIntelligence:
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}")
         self.mode, self.c, self.xi = mode, c, xi
-        self.pairs = []                   # (weight_re, weight_im) of complex layers, in polar modes
+        self.pairs = []                      # (weight_re, weight_im) of complex layers, in polar modes
         paired = set()
         if mode != "cart":
             for m in model.modules():
@@ -49,7 +49,7 @@ class SynapticIntelligence:
         self.Omega = [z(p) for p in self.single]
         self.star = [p.detach().clone() for p in self.single]
         self.start = [p.detach().clone() for p in self.single]
-        self.p_omega = [(z(a), z(a)) for a, _ in self.pairs]       # (magnitude, phase)
+        self.p_omega = [(z(a), z(a)) for a, _ in self.pairs]          # (magnitude, phase)
         self.p_Omega = [(z(a), z(a)) for a, _ in self.pairs]
         self.p_star = [self._polar(a, b) for a, b in self.pairs]
         self.p_start = [self._polar(a, b) for a, b in self.pairs]
@@ -77,7 +77,7 @@ class SynapticIntelligence:
 
     def pre_step(self) -> None:
         """Call after backward (and clipping), before optimizer.step(): remember coordinates and their gradients."""
-        sing = [(p.detach().clone(), torch.zeros_like(p) if p.grad is None else p.grad.detach.clone()) for p in self.single]
+        sing = [(p.detach().clone(), torch.zeros_like(p) if p.grad is None else p.grad.detach().clone()) for p in self.single]
         prs = []
         for a, b in self.pairs:
             m, ph = self._polar(a, b)
