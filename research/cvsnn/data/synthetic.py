@@ -165,9 +165,9 @@ def assoc_recall_batch(
     g = generator
     T = window + delay + tail
     x = torch.zeros(T, batch, n_keys + n_vals + 1)
-    keys = torch.stack([torch.randperm(n_keys, generator=g)[:pairs] for _ in range(batch)])         # (B, P)
+    keys = torch.stack([torch.randperm(n_keys, generator=g)[:pairs] for _ in range(batch)])           # (B, P)
     vals = torch.randint(0, n_vals, (batch, pairs), generator=g)
-    times = torch.stack([torch.randperm(window, generator=g)[:pairs] for _ in range(batch)])        # (B, P)
+    times = torch.stack([torch.randperm(window, generator=g)[:pairs] for _ in range(batch)])          # (B, P)
     b = torch.arange(batch)
     for i in range(pairs):
         x[times[:, i], b, keys[:, i]] = 1.0
