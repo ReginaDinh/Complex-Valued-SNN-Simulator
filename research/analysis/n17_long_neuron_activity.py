@@ -1,7 +1,7 @@
 """N17 follow-up: are the long-memory neurons that the controls keep actually in use, or saturated / silent?
 N18: the same probe on the models trained on permuted MNIST + replay and Split-SHD + replay (saved by N10 / N12).
 
-    cd research && .venv/bin/python -m analysis.n17_long_neuron_activity [out_dir]             # N17 (synthetic)
+    cd research && .venv/bin/python -m analysis.n17_long_neuron_activity [out_dir]            # N17 (synthetic)
     cd research && .venv/bin/python -m analysis.n17_long_neuron_activity results/n18 --benchmarks   # N18
 
 Loads the final trained models of the synthetic-sequence runs saved by analysis/n10_omega.py (N10 rotating long at recall
@@ -41,13 +41,13 @@ def probe_model(row: dict, probe, n_out: int = 16, hidden: int | None = None, he
     model.eval()
     with torch.no_grad():
         acc = (model(x)[0][:, head].argmax(-1) == y).float().mean().item()
-        rate = caught["fire"].float().mean(dim=(0, 1))
-        mag = caught["pot"].abs().mean(dim=(0, 1)) / model.neurons[0].threshold
-        out = {"recall_probe": acc, "recall_run": row["recall_final"]}
-        for name, m in (("long", r >= 0.8), ("short", r < 0.8)):
-            n = int(m.sum())
-            out[name] = {"n": n, "saturated": int((rate[m] > 0.9).sum()), "silent": int((rate[m] < 0.01).sum()),
-                         "mag": float(mag[m].mean()) if n else float("nan")}
+    rate = caught["fire"].float().mean(dim=(0, 1))
+    mag = caught["pot"].abs().mean(dim=(0, 1)) / model.neurons[0].threshold
+    out = {"recall_probe": acc, "recall_run": row["recall_final"]}
+    for name, m in (("long", r >= 0.8), ("short", r < 0.8)):
+        n = int(m.sum())
+        out[name] = {"n": n, "saturated": int((rate[m] > 0.9).sum()), "silent": int((rate[m] < 0.01).sum()),
+                     "mag": float(mag[m].mean()) if n else float("nan")}
     return out
 
 
@@ -56,7 +56,7 @@ def main(out: Path) -> None:
     from experiments.ei54 import C_ECL, T
     from experiments.ep1b import TASK as REC_TASK
     c_rec = REC_TASK["n_keys"] + REC_TASK["n_vals"] + 1
-    xr, yr = assoc_recall_batch(256, pairs=8, generator=torch.Generator().manual_seed(123), **REC_TASK)
+    xr, y = assoc_recall_batch(256, pairs=8, generator=torch.Generator().manual_seed(123), **REC_TASK)
     x = torch.zeros(T, 256, C_ECL + c_rec)
     x[:, :, C_ECL:] = xr
     rows = []
@@ -67,7 +67,7 @@ def main(out: Path) -> None:
                 rows.append(r)
     cells = {}
     for r in rows:
-        cells.setdefault(r["cell"], []).append(probe_model(r, (x, yr)))
+        cells.setdefault(r["cell"], []).append(probe_model(r, (x, y)))
     L = ["# N17 follow-up: activity of long-memory (r >= 0.8) and short-memory hidden neurons on a recall probe (synthetic sequence)", "",
          "Pooled over seeds. Saturated = firing rate > 0.9, silent = < 0.01, active = the rest; |U| / threshold averaged over time and batch.", "",
          "| model | runs | recall (probe / run) | long neurons: n | saturated | silent | **active** | mean \\|U\\|/thr | short neurons: n | saturated | silent | active | mean \\|U\\|/thr |",
@@ -82,8 +82,8 @@ def main(out: Path) -> None:
             mags = [r[g]["mag"] for r in rs if r[g]["n"]]
             act = n - sat - sil
             res[c][g] = {"n": n, "saturated": sat, "silent": sil, "active": act, "mag": sum(mags) / len(mags) if mags else None}
-            row += [str(n), f"{sat / n:.0%}" if n else "-", f"{sil / n:.0%}" if n else "-", f"**{act / n:.0%}**" if n else "-",
-                    f"{sum(mags) / len(mags):.2f}" if mags else "-"]
+            row += [str(n), f"{sat / n:.0%}" if n else "–", f"{sil / n:.0%}" if n else "–", f"**{act / n:.0%}**" if n else "–",
+                    f"{sum(mags) / len(mags):.2f}" if mags else "–"]
         L.append("| " + " | ".join(row) + " |")
     out.mkdir(parents=True, exist_ok=True)
     (out / "activity.md").write_text("\n".join(L) + "\n")
@@ -152,7 +152,7 @@ def main_benchmarks(out: Path) -> None:
                             "acc": sum(o["recall_probe"] for o in outs) / len(outs)}
                 L.append(f"| {setting} | {pname} | {cell} | {res[key]['acc']:.3f} | {n} | {lg['saturated'] / n:.0%} | {lg['silent'] / n:.0%} | {act / n:.0%} | "
                          f"**{res[key]['long_mag']:.2f}** | {sum(o['short']['n'] for o in outs)} | {res[key]['short_mag']:.2f} |" if n else
-                         f"| {setting} | {pname} | {cell} | {res[key]['acc']:.3f} | 0 | - | - | - | - | {sum(o['short']['n'] for o in outs)} | {res[key]['short_mag']:.2f} |")
+                         f"| {setting} | {pname} | {cell} | {res[key]['acc']:.3f} | 0 | – | – | – | – | {sum(o['short']['n'] for o in outs)} | {res[key]['short_mag']:.2f} |")
     out.mkdir(parents=True, exist_ok=True)
     (out / "activity.md").write_text("\n".join(L) + "\n")
     (out / "activity.json").write_text(json.dumps(res, indent=1))
