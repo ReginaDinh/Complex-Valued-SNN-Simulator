@@ -80,7 +80,7 @@ def train_and_probe(name: str, base: str, fw_mult: float, lr: float, steps: int,
         pot = caught["pot"]
         mag = (pot.abs() if torch.is_complex(pot) else pot.abs()) / model.neurons[0].threshold
         rate = caught["fire"].float().mean(dim=(0, 1))
-        k = F.normalize(caught["k"], dim=-1)                # (T, B, heads*d)
+        k = F.normalize(caught["k"], dim=-1)                    # (T, B, heads*d)
         Tn = k.shape[0]
         cos = torch.einsum("tbd,sbd->bts", k, k).abs()
         far = torch.triu(torch.ones(Tn, Tn, dtype=torch.bool), diagonal=5)
