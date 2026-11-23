@@ -16,7 +16,7 @@ digital:
 # Analog crossbar: PLACEHOLDER values (order-of-magnitude guesses). They must be replaced
 # with measured or datasheet values of the actual memristor/PCM array, DAC and ADC.
 analog:
-  device_read: 0.01       # one device read (V * I * t)
-  row_pulse_1bit: 0.05    # drive one row with a binary spike pulse
-  row_dac: 0.5            # drive one row with a multi-bit analog value (DAC), e.g. cos(theta)
-  adc_conversion: 1.0     # one column ADC conversion
+  device_read: 0.01      # one device read (V * I * t)
+  row_pulse_1bit: 0.05   # drive one row with a binary spike pulse
+  row_dac: 0.5           # drive one row with a multi-bit analog value (DAC), e.g. cos(theta)
+  adc_conversion: 1.0    # one column ADC conversion
