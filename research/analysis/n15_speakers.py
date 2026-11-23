@@ -42,7 +42,7 @@ def main(out: Path, seeds: int = 4, workers: int = 12) -> None:
             o = json.loads(l)
             ref.setdefault(o["key"], o)
     L = ["# N15: standard SHD test accuracy by speaker (80 epochs, selected lr)", "",
-         "| model | seeds | validation | test (all) | **test, known speakers** | **test, new speakers (4, 5)** | gap known - new (paired) | new < known in |",
+         "| model | seeds | validation | test (all) | **test, known speakers** | **test, new speakers (4, 5)** | gap known − new (paired) | new < known in |",
          "|---|---|---|---|---|---|---|---|"]
     res = {}
     for v in CELLS:
