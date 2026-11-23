@@ -2,7 +2,7 @@
 
 Each sample (spike times in s, units 0-699) becomes a (T, C) count array: units pooled into C contiguous groups, time
 binned at dt and RIGHT-ALIGNED, so the last spike falls in the last step (the word ends where the read-out starts, as
-the E-CL and permuted-MNIST signals do). Spikes earlier than T * dt before the last spike are droppoed.
+the E-CL and permuted-MNIST signals do). Spikes earlier than T * dt before the last spike are dropped.
 I66 (standard 20-class SHD) uses align="left": bins from t = 0, spikes after T * dt dropped (the usual preprocessing).
 """
 
