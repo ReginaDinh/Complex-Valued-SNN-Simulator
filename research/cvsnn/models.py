@@ -3,12 +3,12 @@
 Every model maps a time-major input (T, B, F) to class logits (B, C). The last layer always has
 C units and the read-out is the time average of a per-unit score (same idea as the browser engine):
 
-* cvsnn : |U_pre| / V_th + 0.5 * spike    (complex spiking; readout='re': Re U_pre / V_th + 0.5 * spike)
-* lif   : V_pre / V_th + 0.5 * spike      (real spiking)
-* cvnn  : |modReLU(U)|                    (complex, non-spiking)
-* lru   : y                               (complex-diagonal SSM, non-spiking)
-* prf   : Re(u) / V_th + 0.5 * spike      (complex state, binary spikes; Huang et al. 2024)
-* csilif: (2 Re(u) - V_th) + 0.5 * spike  (complex state, binary spikes; REACT, Keime et al. 2026)
+* cvsnn : |U_pre| / V_th + 0.5 * spike      (complex spiking; readout='re': Re U_pre / V_th + 0.5 * spike)
+* lif   : V_pre / V_th + 0.5 * spike        (real spiking)
+* cvnn  : |modReLU(U)|                     (complex, non-spiking)
+* lru   : y                                 (complex-diagonal SSM, non-spiking)
+* prf   : Re(u) / V_th + 0.5 * spike         (complex state, binary spikes; Huang et al. 2024)
+* csilif: (2 Re(u) - V_th) + 0.5 * spike     (complex state, binary spikes; REACT, Keime et al. 2026)
 
 ``logits = temperature * mean_t(score)``; temperature 2.5 matches the JS engine.
 """
@@ -31,7 +31,7 @@ KINDS = ("cvsnn", "lif", "cvnn", "lru", "prf", "csilif")
 @dataclass
 class ModelConfig:
     kind: str = "cvsnn"
-    hidden: list[int] = field(default_factory=list) # [] = single layer (like the JS engine)
+    hidden: list[int] = field(default_factory=list)  # [] = single layer (like the JS engine)
     threshold: float = 1.0
     leak_mag: float = 0.85
     leak_phase: float = 0.15
@@ -39,9 +39,9 @@ class ModelConfig:
     reset: str = "soft"
     surrogate: str = "von_mises"
     sharpness: float = 2.5
-    spike_mode: str = "phasor"    # cvsnn: "phasor" | "graded" | "binary" (0/1 events, phase stays in the neuron)
-    binary_on: str = "mag"        # cvsnn binary spikes: threshold on |U| ("mag") or on Re U ("re")
-    phase_bins: int | None = None # timing-coded spikes (cvsnn hidden layers); None = exact phasor
+    spike_mode: str = "phasor"     # cvsnn: "phasor" | "graded" | "binary" (0/1 events, phase stays in the neuron)
+    binary_on: str = "mag"         # cvsnn binary spikes: threshold on |U| ("mag") or on Re U ("re")
+    phase_bins: int | None = None  # timing-coded spikes (cvsnn hidden layers); None = exact phasor
     karatsuba: bool = True
     init: str = "js"
     temperature: float = 2.5
@@ -53,10 +53,10 @@ class ModelConfig:
     # applies to LIF (per-neuron time constants)
     leak_mag_range: tuple | None = None
     leak_phase_range: tuple | None = None
-    phase_dist: str = "uniform"   # one of cvsnn.frequencies.FREQ_SETS
-    phase_bits: int | None = None # grid of the 'quantized' / 'sidon' frequency sets
-    learn_phase: bool = True      # False: frequencies stay at their initial set, |beta| still learns
-    mem_frac: float | None = None # cvsnn: split layers into processing + memory neurons (see CLIF)
+    phase_dist: str = "uniform"    # one of cvsnn.frequencies.FREQ_SETS
+    phase_bits: int | None = None  # grid of the 'quantized' / 'sidon' frequency sets
+    learn_phase: bool = True       # False: frequencies stay at their initial set, |beta| still learns
+    mem_frac: float | None = None  # cvsnn: split layers into processing + memory neurons (see CLIF)
     # with mem_frac: the output layer gets one processing and one memory neuron per class (score = their sum), so
     # every class has a read-out neuron that can hold information through a delay
     out_pairs: bool = False
@@ -92,8 +92,8 @@ class ModelConfig:
     # 'damping_const' = the same extra leak at every step), with the
     # deadline in steps (see cvsnn.layers.Urgency)
     urgency: str | None = None
-    deadline: int | None = None   # with memory_from_input: "reim" ([Re, Im] of complex sensors) or "real" (real input)
-    readout: str = "mag"          # cvsnn read-out score: |U| / V_th ("mag", phase-invariant, >= 0) or Re U / V_th ("re", signed)
+    deadline: int | None = None     # with memory_from_input: "reim" ([Re, Im] of complex sensors) or "real" (real input)
+    readout: str = "mag"           # cvsnn read-out score: |U| / V_th ("mag", phase-invariant, >= 0) or Re U / V_th ("re", signed)
     brf_gamma: float = 0.9
     brf_strength: float = 0.01
     # PRF / C-SiLIF baselines
@@ -106,7 +106,7 @@ class ModelConfig:
     # everything downstream sees only spikes, as on a neuromorphic chip fed by spiking sensors.
     encoder: bool = False
     encoder_gain: float = 1.0
-    encoder_reset: str | None = None  # reset of the encoder neurons (None = same as the other layers)
+    encoder_reset: str | None = None   # reset of the encoder neurons (None = same as the other layers)
     # Read-out window: 0 = average over the whole sequence; R > 0 = only the last R steps
     # (memory tasks must use R > 0, otherwise the read-out can see the inputs directly)
     readout_last: int = 0
@@ -119,15 +119,15 @@ class ModelConfig:
     feedback: str = "exact"
     # P3 step 3: phase-gated plasticity. Synaptic weights may change only at gated (time, sample, neuron) points; the
     # values, the learning signal passed to earlier layers and the learning of neuron parameters are unchanged.
-    #   None        : no gate
-    #   "theta"     : a global slow rhythm theta_t = 2 pi t / theta_period + phi (phi random per sample); synapses learn
-    #                 in one half cycle, cos theta_t > 0 (separate encoding phase, Hasselmo et al. 2002)
-    #   "phase_rel" : synapses onto neuron j learn when j's membrane phase is within +-90 deg of theta_t (cvsnn only)
-    #   "random"    : control, an input-independent random gate open half of the time (per time, sample, neuron)
-    rotate_frac: float | None = None  # I25: only this fraction of the cLIF neurons rotate (the rest omega = 0); None = all
-    input_norm: bool = False          # I70: cLIF input scaled by sqrt(1 - |beta|^2) (LRU-style), see CLIF
-    lif_adapt: dict | None = None     # I61: kind 'lif' neurons become adLIF (adaptation current); see LIF
-    rnn_cell: str | None = None       # N19: kind 'lif' hidden layers become a non-spiking GRU / LSTM (read-out stays LIF)
+    #   None       : no gate
+    #   "theta"    : a global slow rhythm theta_t = 2 pi t / theta_period + phi (phi random per sample); synapses learn
+    #                in one half cycle, cos theta_t > 0 (separate encoding phase, Hasselmo et al. 2002)
+    #   "phase_rel": synapses onto neuron j learn when j's membrane phase is within +-90 deg of theta_t (cvsnn only)
+    #   "random"   : control, an input-independent random gate open half of the time (per time, sample, neuron)
+    rotate_frac: float | None = None   # I25: only this fraction of the cLIF neurons rotate (the rest omega = 0); None = all
+    input_norm: bool = False           # I70: cLIF input scaled by sqrt(1 - |beta|^2) (LRU-style), see CLIF
+    lif_adapt: dict | None = None      # I61: kind 'lif' neurons become adLIF (adaptation current); see LIF
+    rnn_cell: str | None = None        # N19: kind 'lif' hidden layers become a non-spiking GRU / LSTM (read-out stays LIF)
     # I29: context-dependent gating of the hidden layers (Masse et al. 2018, XdG), the task given as context: only a
     # subset of hidden neurons is active (and so learns) in each task. "random": a fixed random half per task;
     # "phase": task t gets a theta phase 2 pi t / n_contexts, neuron j a preferred phase psi_j, and j is active when
@@ -153,7 +153,7 @@ def neuron_out_features(neuron: nn.Module) -> int:
         return neuron.D.shape[0]
     if isinstance(neuron, LIF):
         return neuron.leak_raw.shape[0]
-    return neuron.leak_mag_raw.shape[0] # ComplexLeakyRNN
+    return neuron.leak_mag_raw.shape[0]  # ComplexLeakyRNN
 
 
 def _rng(r):
@@ -266,7 +266,7 @@ class SequenceClassifier(nn.Module):
                 else:
                     self.neurons.append(CSiLIF(d_out, cfg.threshold, cfg.csilif_lambda_im, tuple(cfg.csilif_rho_range),
                                                sharpness=cfg.sharpness))
-            else: # lru
+            else:  # lru
                 self.linears.append(nn.Identity())
                 self.neurons.append(LRU(d_in, cfg.lru_state, d_out, cfg.lru_r_min, cfg.lru_r_max, cfg.lru_max_phase))
         self.mem_linear = self.mem_neuron = None
@@ -319,7 +319,7 @@ class SequenceClassifier(nn.Module):
                     order = torch.randperm(cfg.n_contexts, generator=g) if cfg.context_gate == "phase_shuffled" else torch.arange(cfg.n_contexts)
                     ph = 2 * math.pi * order.float() / cfg.n_contexts
                     m = (torch.cos(ph.view(-1, 1) - psi.view(1, -1)) > 0).float()
-                masks.append(m)                                              # (n_contexts, n)
+                masks.append(m)                                             # (n_contexts, n)
             self.ctx_masks = masks
         if cfg.feedback not in ("exact", "random"):
             raise ValueError("feedback must be 'exact' or 'random'")
@@ -486,7 +486,7 @@ class SequenceClassifier(nn.Module):
         elif cfg.kind == "lif":
             score = last_pot / cfg.threshold + 0.5 * last_fire
         elif cfg.kind == "cvnn":
-            score = complex_magnitude(h)   # modReLU output of the last layer (uses its bias)
+            score = complex_magnitude(h)  # modReLU output of the last layer (uses its bias)
         elif cfg.kind == "prf":
             score = last_pot.real / cfg.threshold + 0.5 * last_fire
         elif cfg.kind == "csilif":
@@ -515,7 +515,7 @@ class SequenceClassifier(nn.Module):
             elif isinstance(lin, nn.Linear):
                 total += lin.in_features * lin.out_features
             elif isinstance(lin, ChannelEncoder):
-                total += 0   # sensor front end: fixed gain, no synaptic array
+                total += 0  # sensor front end: fixed gain, no synaptic array
             if isinstance(neuron, LRU):
                 total += neuron.B.real_mults_per_sample() + neuron.C.real_mults_per_sample()
         if self.mem_linear is not None:
