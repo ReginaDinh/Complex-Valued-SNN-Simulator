@@ -59,7 +59,7 @@ def main(out: Path, seeds: int = 4, workers: int = 12) -> None:
         L.append(f"- {v}: " + ", ".join(f"speaker {s}: {a:.3f}" for s, a in sorted(x["per_speaker"].items(), key=lambda kv: int(kv[0]))))
     same = [abs(r["test"] - ref[r["key"]]["test"]) < 1e-12 for r in rows if r["key"] in ref]
     L += ["", f"Reproduction: overall test accuracy identical to the original run of the same key in {sum(same)}/{len(same)} runs "
-          f"({len(rows) - len(same)} without an original)."]
+              f"({len(rows) - len(same)} without an original)."]
     (out / "summary.md").write_text("\n".join(L) + "\n")
     (out / "summary.json").write_text(json.dumps(res, indent=1))
     print("\n".join(L))
@@ -67,4 +67,4 @@ def main(out: Path, seeds: int = 4, workers: int = 12) -> None:
 
 if __name__ == "__main__":
     main(Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "results/n15",
-         int(sys.argv[2]) if len(sys.argv) > 2 else 4, int(sys.argv[3]) if len(sys.argv) > 3 else 12
+         int(sys.argv[2]) if len(sys.argv) > 2 else 4, int(sys.argv[3]) if len(sys.argv) > 3 else 12)
