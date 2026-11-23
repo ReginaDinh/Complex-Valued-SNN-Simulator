@@ -4,7 +4,7 @@
 
 Every panel uses the setting selected in the corresponding report (seeds 0-4 on validation) and all 10 seeds unless noted;
 bars are means, error bars 95% CI (t), dots single seeds. Output: fig*.pdf / fig*.png and sources.md in out_dir
-(default docs/paper/figures). Every panel is also saved on its own (fig1a_..., fig2a_...), without a panel letter, so it can be
+(default docs/paper/figures). Every panel is also saved on its own (fig1a_…, fig2a_…), without a panel letter, so it can be
 placed separately; the combined figures carry the letters.
 """
 
@@ -27,7 +27,7 @@ COL = {"rot": "#1f4e9c", "norot": "#e08214", "lif_long": "#7f7f7f", "lif_short":
 NAME = {"rot": "Rotating cLIF", "norot": "No-rotation cLIF", "lif_long": "LIF (long)", "lif_short": "LIF (short)", "se": "SE-adLIF",
         "brf": "BRF", "adlif": "adLIF (free)", "gru": "GRU (non-spiking)", "lstm": "LSTM (non-spiking)"}
 SOURCES = []
-BIG = SMALL = 8   # one font size for every text in every figure (figures are drawn at their print size)
+BIG = SMALL = 8     # one font size for every text in every figure (figures are drawn at their print size)
 FULL, HALF = 5.5, 2.7   # NeurIPS text width and a half-width panel (inches)
 plt.rcParams.update({"font.size": BIG, "axes.labelsize": BIG, "xtick.labelsize": SMALL, "ytick.labelsize": SMALL,
                      "legend.fontsize": SMALL, "legend.title_fontsize": SMALL, "axes.spines.top": False, "axes.spines.right": False, "figure.dpi": 150,
@@ -60,6 +60,7 @@ def pick(rows: dict, variant: str, lr, seeds=range(10), field=None) -> list:
         raise ValueError(f"{variant} {lr}: missing seeds {missing}")
     rs = [got[s] for s in sorted(got)]
     return [r[field] for r in rs] if field else rs
+
 
 
 PANEL = (3.4, 2.6)   # size of a single-panel file (inches)
@@ -272,7 +273,7 @@ def p1a_schematic(fig, spec, own):
 def p1b_phasor(fig, spec, own):
     sub = spec.subgridspec(2, 1, height_ratios=[0.3, 2.0], hspace=0.12)
     for k, (om, title, col, lims) in enumerate(((0.0, "No rotation", COL["norot"], ((-0.5, 18.5), (-0.5, 0.5))),
-                                                (0.5, "Rotation, $\\omega = 0.5$", COL["rot"], ((-1.3, 3.1), (-1.0, 3.6))))):
+                                               (0.5, "Rotation, $\\omega = 0.5$", COL["rot"], ((-1.3, 3.1), (-1.0, 3.6))))):
         a2 = fig.add_subplot(sub[k])
         z = 0j
         for t in range(40):
@@ -315,8 +316,8 @@ def fig1(out: Path):
         fig.get_layout_engine().set(w_pad=0.05, h_pad=0.05, hspace=0.02, wspace=0.08)
         gs = fig.add_gridspec(3, 2, height_ratios=[1.1, 0.2, 1])   # an empty middle row separates (a) from (b), (c)
         return fig, [gs[0, :], gs[2, 0], gs[2, 1]]
-    emit(out, "fig1_model", "schematic (a); illustration (b): head-to-tail sum of r^t e^{iwt} over 40 steps, r = 0.95, w = 0 vs 0.5; "
-         "(c) one neuron without reset, r = 0.99, input mean 0.03 + noise, w = 0 vs 0.15 (Proposition 1)",
+    emit(out, "fig1_model", "schematic (a); illustration (b): head-to-tail sum of r^t e^{iwt} over 40 steps, r = 0.95, ω = 0 vs 0.5; "
+         "(c) one neuron without reset, r = 0.99, input mean 0.03 + noise, ω = 0 vs 0.15 (Proposition 1)",
          [("fig1a_schematic", p1a_schematic, (FULL, 2.5), "Model"), ("fig1b_phasor_sum", p1b_phasor, (HALF, 2.6), "Sum of the last 40 inputs, $r = 0.95$"),
           ("fig1c_one_neuron", p1c_neuron, (HALF, 2.3), "One neuron without reset, $r = 0.99$")], layout)
 
@@ -332,9 +333,9 @@ def _fig2_data():
 
 def _fig2_groups(d, field):
     return [("Short memory\n(reset)", [("rot", [r[field] for r in d["rot_short"]]), ("norot", [r[field] for r in d["norot_short"]]),
-                                        ("lif_short", [r[field] for r in d["lif_short"]])]),
+            ("lif_short", [r[field] for r in d["lif_short"]])]),
             ("Long memory\n(no reset)", [("rot", [r[field] for r in d["rot_long"]]), ("norot", [r[field] for r in d["norot_long"]]),
-                                         ("lif_long", [r[field] for r in d["lif_long"]])])]
+            ("lif_long", [r[field] for r in d["lif_long"]])])]
 
 
 def fig2(out: Path):
@@ -492,7 +493,7 @@ def fig6(out: Path):
         for gi, (g, vals) in enumerate(groups):
             for i, c in enumerate(("rot", "norot", "lif_long")):
                 ax.bar(gi + (i - 1) * w, vals[c], w * 0.88, color=COL[c], label=NAME[c] if gi == 0 else None)
-        ax.axhline(1.0, color="k", lw=0.6, ls=":")
+        ax.axhline(1.0, color="k", lw=0.5, ls=":")
         ax.annotate("Threshold", (1.0, 1.0), xycoords=ax.get_yaxis_transform(), xytext=(4, 0), textcoords="offset points",
                     ha="left", va="center", fontsize=SMALL)
         ax.set_xticks(range(len(groups)))
@@ -505,7 +506,6 @@ def fig6(out: Path):
          "(c) N17 (synthetic) and N18 (benchmark-trained models, no new training), selected settings, 10 seeds pooled; dotted line = threshold",
          [("fig6a_proposition1", pa, (HALF, 2.4), "Proposition 1"), ("fig6b_memory_after_training", pb, (HALF, 2.4), "Memory after training (synthetic)"),
           ("fig6c_long_memory_potential", pc, (FULL, 2.3), r"Long-memory neurons ($r \geq 0.8$)")], _two_rows(4.9))
-
 
 
 def table1(out: Path):
@@ -555,10 +555,10 @@ def table1(out: Path):
         tex.append(f"{NAME[m]} & " + " & ".join(ct) + r" \\")
     tex += [r"\bottomrule", r"\end{tabular}"]
     (out / "table1.md").write_text("# Table 1 (generated by research/analysis/paper_figures.py)\n\n"
-                                    "Final accuracy after the continual-learning sequence (mean ± 95% CI, 10 seeds; bold = best spiking network in column). "
-                                    "In brackets: seeds (of 10) in which the rotating cLIF is higher. Each cell at the setting selected in its report "
-                                    "(I59, I59b, I63, I63b, I64a, I64b, I67, N19); SE-adLIF, BRF and the non-spiking GRU / LSTM (same plastic synapse, "
-                                    "parameter-matched) were run with replay only.\n\n" + "\n".join(md) + "\n")
+                                   "Final accuracy after the continual-learning sequence (mean ± 95% CI, 10 seeds; bold = best spiking network in column). "
+                                   "In brackets: seeds (of 10) in which the rotating cLIF is higher. Each cell at the setting selected in its report "
+                                   "(I59, I59b, I63, I63b, I64a, I64b, I67, N19); SE-adLIF, BRF and the non-spiking GRU / LSTM (same plastic synapse, "
+                                   "parameter-matched) were run with replay only.\n\n" + "\n".join(md) + "\n")
     (out / "table1.tex").write_text("% generated by research/analysis/paper_figures.py; needs \\usepackage{booktabs}\n" + "\n".join(tex) + "\n")
     SOURCES.append("- `table1`: I59, I59b, I63, I63b, I64a, I64b, I67, N19 (GRU / LSTM); final accuracy (ecl_final_avg), selected settings, 10 seeds")
 
