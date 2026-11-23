@@ -1,0 +1,25 @@
+name: iso_phase_hw
+hypothesis: >-
+  Hardware view of the iso-phase control. Questions: (1) how fast does accuracy fall with device
+  programming noise for complex (4-device) vs real [Re, Im] (2-device pairs) synapses, and does
+  noise-aware training recover it; (2) estimated energy per inference on event-driven digital,
+  dense digital and analog crossbar platforms, from measured spike activity. Analog energy numbers
+  are placeholders until device data is available.
+device: cpu
+seeds: 5
+task: {kind: iso_phase, time_steps: 30, features: 16, freq0: 1.5, phase_shift: 1.5708, noise: 0.1}
+train: {steps: 200, batch_size: 32, lr: 0.003, test_size: 512}
+hardware:
+  energy: configs/energy/default.yaml
+  train_device: {weight_bits: 4, prog_noise: 0.05, adc_bits: 6}   # used by models with noise_aware: true
+  eval:
+    device: {weight_bits: 4, adc_bits: 6}
+    sweep: {prog_noise: [0.0, 0.02, 0.05, 0.1, 0.2]}
+    chips: 5
+models:
+  - {name: cvsnn, input: complex, model: {kind: cvsnn}}
+  - {name: cvsnn_noise_aware, input: complex, noise_aware: true, model: {kind: cvsnn}}
+  - {name: lif_reim, input: reim, model: {kind: lif}}
+  - {name: lif_reim_noise_aware, input: reim, noise_aware: true, model: {kind: lif}}
+  - {name: lif_magnitude, input: magnitude, model: {kind: lif}}
+  - {name: cvnn, input: complex, model: {kind: cvnn}}
