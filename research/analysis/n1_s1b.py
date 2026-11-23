@@ -1,6 +1,6 @@
 """N1-S1b: continuous values in a knowledge memory: phasor fractional powers vs a real level code.
 
-    cd research && .venv/bin/python -m analysis.n1_s1b          # full (about 1-2 min)
+    cd research && .venv/bin/python -m analysis.n1_s1b            # full (about 1-2 min)
     .venv/bin/python -m analysis.n1_s1b --quick
 
 Facts with a continuous value, e.g. "temperature of A = 0.37", are stored as a superposition
@@ -13,11 +13,11 @@ r = sum_i role_i (x) value(v_i) of M facts, v_i ~ U(0, 1). Value codes, at equal
           between them; the number of pieces sets the resolution, chosen on separate trials like the fpe bandwidth).
           Roles are random +-1; bind = unbind = elementwise product.
 Tasks, all decoded by the best match over a grid of candidate values:
-  1. recall     : the value of a stored fact (RMSE)
-  2. difference : v_A - v_B for two stored facts. fpe: in the code, value(v_A) * conj(value(v_B)) decoded once
-                  ("algebraic"), or decode both and subtract; level: decode both and subtract (no in-code operation)
-  3. shift all  : add delta to every stored value at once. fpe: one product r * value(delta); level: no operation
-                  on the record exists (each fact would have to be decoded, shifted and re-encoded)
+  1. recall      : the value of a stored fact (RMSE)
+  2. difference  : v_A - v_B for two stored facts. fpe: in the code, value(v_A) * conj(value(v_B)) decoded once
+                   ("algebraic"), or decode both and subtract; level: decode both and subtract (no in-code operation)
+  3. shift all   : add delta to every stored value at once. fpe: one product r * value(delta); level: no operation
+                   on the record exists (each fact would have to be decoded, shifted and re-encoded)
 Prediction written before running: recall about equal; difference about equal or better for fpe; only fpe can shift
 all values at once, and with no added error (a product with a unit phasor is exact).
 """
@@ -32,7 +32,7 @@ from pathlib import Path
 import torch
 
 OUT = Path(__file__).resolve().parents[1] / "results" / "n1_s1b"
-GRID = torch.linspace(-1.0, 2.0, 3001, dtype=torch.float64)   # candidate values (covers differences and shifts)
+GRID = torch.linspace(-1.0, 2.0, 3001, dtype=torch.float64)       # candidate values (covers differences and shifts)
 
 
 class FPE:
@@ -115,7 +115,7 @@ def trial(code_name: str, n: int, m: int, b: float, seed: int, pairs: int = 20, 
         true_d = v[ia] - v[ib]
         res["diff_decode_rmse"] = rmse(v_hat[ia] - v_hat[ib], true_d)
         if code_name == "fpe":
-            prod = unb[ia] * torch.conj(unb[ib])               # value(v_A - v_B) plus cross-talk, in the code
+            prod = unb[ia] * torch.conj(unb[ib])                     # value(v_A - v_B) plus cross-talk, in the code
             res["diff_algebraic_rmse"] = rmse(code.decode(prod, -1.0, 1.0), true_d)
     if code_name == "fpe":
         shifted = record * code.value(torch.tensor([delta], dtype=torch.float64))   # every stored value + delta
