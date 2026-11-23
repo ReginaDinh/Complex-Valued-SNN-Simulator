@@ -1,4 +1,21 @@
-"""N10 (theory check for Proposition 1): after training, do the rotations of the long-memory cLIF stay away from 0? N12 (control): do the no-rotation long-memory cLIF and LIF long also shorten their memories during training? cd research && .venv/bin/python -m analysis.n10_omega [out_dir] [seeds] [workers] # N10 cd research && .venv/bin/python -m analysis.n10_omega results/n12 10 10 --cells norot,lif --also results/n10 # N12 cd research && .venv/bin/python -m analysis.n10_omega results/n13 10 10 --cells rot_lr1e-1,norot_lr1e-2,lif_lr1e-2 --also results/n10,results/n12 # N13 cd research && .venv/bin/python -m analysis.n10_omega results/n17 10 10 --cells norot_lr1e-2_rs3,lif_lr1e-2_rs3 --also results/n10,results/n13 # N17 The pile-up bound mu / sin(omega) only helps while omega is clearly non-zero. This reruns the selected rotating long-memory cell (cand_long, plastic synapse x0.03, recall lr 1e-2) at its selected settings on the three continual-learning tasks of the paper, 10 seeds, and records (r, omega) of every hidden neuron at initialisation, after the recall phase and at the end: - synthetic sequence (I54i): two heads, E-CL lr 3e-4; - permuted MNIST + replay 100 (I64b): 120 hidden, MNIST-phase lr 1e-3; - Split-SHD + replay 100 (I64a): 120 hidden, SHD-phase lr 1e-3. Reports |omega| quantiles, the share of neurons with |omega| < 0.05, and the pile-up gain 1/|1 - lambda| next to the gain 1/(1 - r) the same neuron would have without rotation. Reproduction check: the final metrics must equal the original runs (same keys, same code path). """
+"""N10 (theory check for Proposition 1): after training, do the rotations of the long-memory cLIF stay away from 0?
+N12 (control): do the no-rotation long-memory cLIF and LIF long also shorten their memories during training?
+
+    cd research && .venv/bin/python -m analysis.n10_omega [out_dir] [seeds] [workers]                        # N10
+    cd research && .venv/bin/python -m analysis.n10_omega results/n12 10 10 --cells norot,lif --also results/n10   # N12
+    cd research && .venv/bin/python -m analysis.n10_omega results/n13 10 10 --cells rot_lr1e-1,norot_lr1e-2,lif_lr1e-2 --also results/n10,results/n12   # N13
+    cd research && .venv/bin/python -m analysis.n10_omega results/n17 10 10 --cells norot_lr1e-2_rs3,lif_lr1e-2_rs3 --also results/n10,results/n13   # N17
+
+The pile-up bound mu / sin(omega) only helps while omega is clearly non-zero. This reruns the selected rotating long-memory
+cell (cand_long, plastic synapse x0.03, recall lr 1e-2) at its selected settings on the three continual-learning tasks of
+the paper, 10 seeds, and records (r, omega) of every hidden neuron at initialisation, after the recall phase and at the end:
+  - synthetic sequence (I54i): two heads, E-CL lr 3e-4;
+  - permuted MNIST + replay 100 (I64b): 120 hidden, MNIST-phase lr 1e-3;
+  - Split-SHD + replay 100 (I64a): 120 hidden, SHD-phase lr 1e-3.
+Reports |omega| quantiles, the share of neurons with |omega| < 0.05, and the pile-up gain 1/|1 - lambda| next to the
+gain 1/(1 - r) the same neuron would have without rotation. Reproduction check: the final metrics must equal the original
+runs (same keys, same code path).
+"""
 
 from __future__ import annotations
 
@@ -84,7 +101,7 @@ def main(out: Path, seeds: int = 10, workers: int = 10, cells=("rot",), also=())
         for i, fu in enumerate(as_completed([pool.submit(_one, j) for j in todo]), 1):
             f.write(json.dumps(fu.result()) + "\n")
             f.flush()
-            print(f" {i}/{len(todo)}", flush=True)
+            print(f"  {i}/{len(todo)}", flush=True)
     rows = []
     for d in (out, *map(Path, also)):   # N12: the N10 rows (rotating long) join the table
         rows += [{"cell": "rotating long", **json.loads(l)} for l in (d / "runs.jsonl").read_text().splitlines()]
