@@ -56,7 +56,7 @@ def trial(memory: str, kind: str, n: int, m: int, seed: int) -> dict:
         read = lambda k: r * (torch.conj(k) if torch.is_complex(k) else k)
     else:
         kt = torch.conj(stored) if kind == "complex" else stored
-        A = vals.T @ kt                                     # (n, n): sum_i value_i key_i^H
+        A = vals.T @ kt                                              # (n, n): sum_i value_i key_i^H
         read = lambda k: (A @ k.T).T
     s_in, s_out = sim(read(stored), book), sim(read(unstored), book)
     return {"acc": (s_in.argmax(-1) == fill).double().mean().item(),
