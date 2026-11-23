@@ -7,13 +7,13 @@ Slots n and n + 8 get the same theta tag, so their tagged keys overlap exactly a
 do. If the network told the two cycles apart through the content part (traces of earlier items while writing, the
 cycle cue while asking), these keys should overlap no more than keys of unrelated slots. Measures on the test batch
 of I28c (same seeds), per sample and head, keys taken at the write times t_n = 4 n:
-  overlap_alias       mean |<k_n, k_{n+8}>|, n = 0..3 (same theta phase, different cycle)
-  overlap_same_cycle  mean |<k_n, k_m>|, n != m both in cycle 1 (different phases)
-  overlap_cross       mean |<k_n, k_m>|, n in cycle 1, m in cycle 2, different phases
+  overlap_alias      mean |<k_n, k_{n+8}>|, n = 0..3 (same theta phase, different cycle)
+  overlap_same_cycle mean |<k_n, k_m>|, n != m both in cycle 1 (different phases)
+  overlap_cross      mean |<k_n, k_m>|, n in cycle 1, m in cycle 2, different phases
   query_target / query_alias  mean |<k, q>| at the read-out for the queried slot and for the slot sharing its phase
-  write_gate_alias    mean write gate at the aliased slots (0-3, 8-11), to check both were written
-  cue_swap / cue_none at the query, swap or remove the cycle cue (theta phase unchanged): how often the network then
-                      answers the queried slot's item and how often the item of the slot sharing its phase
+  write_gate_alias   mean write gate at the aliased slots (0-3, 8-11), to check both were written
+  cue_swap / cue_none  at the query, swap or remove the cycle cue (theta phase unchanged): how often the network then
+                   answers the queried slot's item and how often the item of the slot sharing its phase
 Chance overlap of random unit vectors: complex d = 8 0.318, real d = 11 0.246.
 """
 
@@ -46,39 +46,39 @@ def analyse(path: Path, seed: int) -> dict:
     model.eval()
     with torch.no_grad():
         lg, _ = model(xin, theta=theta)
-        k, q, beta = model.fw.last["k"], model.fw.last["q"], model.fw.last["beta"]  # (T, B, H, d), (T, B, H)
-        n_items, cyc, slot, tail = task["items"], task["cycle_slots"], task["slot"], task["tail"]
-        K = torch.stack([k[n * slot] for n in range(n_items)], 1)                  # (B, items, H, d)
-        G = inner(K.unsqueeze(2), K.unsqueeze(1))                                  # (B, items, items, H)
-        alias = [(n, n + cyc) for n in range(n_items - cyc)]
-        same = [(n, m) for n in range(cyc) for m in range(cyc) if n != m]
-        cross = [(n, m) for n in range(cyc) for m in range(cyc, n_items) if m - cyc != n]
-        mean_pairs = lambda pairs: torch.stack([G[:, i, j] for i, j in pairs]).mean().item()
-        qr = q[-tail:]                                                             # (tail, B, H, d), same input on every read-out step
-        b = torch.arange(x.shape[1])
-        wrapped = (pos < n_items - cyc) | (pos >= cyc)
-        partner = torch.where(pos < cyc, pos + cyc, pos - cyc)
-        tgt = inner(K[b, pos].unsqueeze(0), qr)[:, wrapped].mean().item()
-        ali = inner(K[b, partner.clamp(max=n_items - 1)].unsqueeze(0), qr)[:, wrapped].mean().item()
-        gate_idx = [n * slot for n in range(n_items) if n < n_items - cyc or n >= cyc]
-        # cue probe: at the query, keep the theta phase but swap (or remove) the cycle cue; on samples whose two items of
-        # the same phase differ, which of them does the network answer?
-        items = torch.stack([x[n * slot, :, :task["n_symbols"]].argmax(-1) for n in range(n_items)], 1)  # (B, items)
-        pi = partner.clamp(max=n_items - 1)
-        diff = wrapped & (items[b, pos] != items[b, pi])
-        probe = {}
-        cue = slice(task["n_symbols"] + 1, None)
-        for name in ("swap", "none"):
-            xx = x.clone()
-            xx[-tail:, :, cue] = xx[-tail:, :, cue].flip(-1) if name == "swap" else 0.0
-            with torch.no_grad():
-                pr = model(network_input(xx, theta, cplx), theta=theta)[0].argmax(-1)
-                probe[f"cue_{name}_answers_queried"] = (pr == items[b, pos])[diff].float().mean().item()
-                probe[f"cue_{name}_answers_partner"] = (pr == items[b, pi])[diff].float().mean().item()
-        return {"seed": seed, "test_acc": (lg.argmax(-1) == y).float().mean().item(),
-                "overlap_alias": mean_pairs(alias), "overlap_same_cycle": mean_pairs(same), "overlap_cross": mean_pairs(cross),
-                "query_target": tgt, "query_alias": ali, "write_gate_alias": beta[gate_idx].mean().item(),
-                "write_gate_between": beta[[t for t in range(n_items * slot) if t % slot]].mean().item(), **probe}
+    k, q, beta = model.fw.last["k"], model.fw.last["q"], model.fw.last["beta"]  # (T, B, H, d), (T, B, H)
+    n_items, cyc, slot, tail = task["items"], task["cycle_slots"], task["slot"], task["tail"]
+    K = torch.stack([k[n * slot] for n in range(n_items)], 1)                  # (B, items, H, d)
+    G = inner(K.unsqueeze(2), K.unsqueeze(1))                                  # (B, items, items, H)
+    alias = [(n, n + cyc) for n in range(n_items - cyc)]
+    same = [(n, m) for n in range(cyc) for m in range(cyc) if n != m]
+    cross = [(n, m) for n in range(cyc) for m in range(cyc, n_items) if m - cyc != n]
+    mean_pairs = lambda pairs: torch.stack([G[:, i, j] for i, j in pairs]).mean().item()
+    qr = q[-tail:]                                                             # (tail, B, H, d), same input on every read-out step
+    b = torch.arange(x.shape[1])
+    wrapped = (pos < n_items - cyc) | (pos >= cyc)
+    partner = torch.where(pos < cyc, pos + cyc, pos - cyc)
+    tgt = inner(K[b, pos].unsqueeze(0), qr)[:, wrapped].mean().item()
+    ali = inner(K[b, partner.clamp(max=n_items - 1)].unsqueeze(0), qr)[:, wrapped].mean().item()
+    gate_idx = [n * slot for n in range(n_items) if n < n_items - cyc or n >= cyc]
+    # cue probe: at the query, keep the theta phase but swap (or remove) the cycle cue; on samples whose two items of
+    # the same phase differ, which of them does the network answer?
+    items = torch.stack([x[n * slot, :, :task["n_symbols"]].argmax(-1) for n in range(n_items)], 1)  # (B, items)
+    pi = partner.clamp(max=n_items - 1)
+    diff = wrapped & (items[b, pos] != items[b, pi])
+    probe = {}
+    cue = slice(task["n_symbols"] + 1, None)
+    for name in ("swap", "none"):
+        xx = x.clone()
+        xx[-tail:, :, cue] = xx[-tail:, :, cue].flip(-1) if name == "swap" else 0.0
+        with torch.no_grad():
+            pr = model(network_input(xx, theta, cplx), theta=theta)[0].argmax(-1)
+        probe[f"cue_{name}_answers_queried"] = (pr == items[b, pos])[diff].float().mean().item()
+        probe[f"cue_{name}_answers_partner"] = (pr == items[b, pi])[diff].float().mean().item()
+    return {"seed": seed, "test_acc": (lg.argmax(-1) == y).float().mean().item(),
+            "overlap_alias": mean_pairs(alias), "overlap_same_cycle": mean_pairs(same), "overlap_cross": mean_pairs(cross),
+            "query_target": tgt, "query_alias": ali, "write_gate_alias": beta[gate_idx].mean().item(),
+            "write_gate_between": beta[[t for t in range(n_items * slot) if t % slot]].mean().item(), **probe}
 
 
 def main() -> None:
