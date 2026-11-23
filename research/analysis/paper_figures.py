@@ -273,7 +273,7 @@ def p1a_schematic(fig, spec, own):
 def p1b_phasor(fig, spec, own):
     sub = spec.subgridspec(2, 1, height_ratios=[0.3, 2.0], hspace=0.12)
     for k, (om, title, col, lims) in enumerate(((0.0, "No rotation", COL["norot"], ((-0.5, 18.5), (-0.5, 0.5))),
-                                              (0.5, "Rotation, $\\omega = 0.5$", COL["rot"], ((-1.3, 3.1), (-1.0, 3.6))))):
+                                                 (0.5, "Rotation, $\\omega = 0.5$", COL["rot"], ((-1.3, 3.1), (-1.0, 3.6))))):
         a2 = fig.add_subplot(sub[k])
         z = 0j
         for t in range(40):
