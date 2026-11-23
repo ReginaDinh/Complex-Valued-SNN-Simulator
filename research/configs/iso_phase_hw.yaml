@@ -11,7 +11,7 @@ task: {kind: iso_phase, time_steps: 30, features: 16, freq0: 1.5, phase_shift: 1
 train: {steps: 200, batch_size: 32, lr: 0.003, test_size: 512}
 hardware:
   energy: configs/energy/default.yaml
-  train_device: {weight_bits: 4, prog_noise: 0.05, adc_bits: 6}   # used by models with noise_aware: true
+  train_device: {weight_bits: 4, prog_noise: 0.05, adc_bits: 6}      # used by models with noise_aware: true
   eval:
     device: {weight_bits: 4, adc_bits: 6}
     sweep: {prog_noise: [0.0, 0.02, 0.05, 0.1, 0.2]}
