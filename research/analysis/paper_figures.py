@@ -273,7 +273,7 @@ def p1a_schematic(fig, spec, own):
 def p1b_phasor(fig, spec, own):
     sub = spec.subgridspec(2, 1, height_ratios=[0.3, 2.0], hspace=0.12)
     for k, (om, title, col, lims) in enumerate(((0.0, "No rotation", COL["norot"], ((-0.5, 18.5), (-0.5, 0.5))),
-                                               (0.5, "Rotation, $\\omega = 0.5$", COL["rot"], ((-1.3, 3.1), (-1.0, 3.6))))):
+                                              (0.5, "Rotation, $\\omega = 0.5$", COL["rot"], ((-1.3, 3.1), (-1.0, 3.6))))):
         a2 = fig.add_subplot(sub[k])
         z = 0j
         for t in range(40):
@@ -316,7 +316,7 @@ def fig1(out: Path):
         fig.get_layout_engine().set(w_pad=0.05, h_pad=0.05, hspace=0.02, wspace=0.08)
         gs = fig.add_gridspec(3, 2, height_ratios=[1.1, 0.2, 1])   # an empty middle row separates (a) from (b), (c)
         return fig, [gs[0, :], gs[2, 0], gs[2, 1]]
-    emit(out, "fig1_model", "schematic (a); illustration (b): head-to-tail sum of r^t e^{iwt} over 40 steps, r = 0.95, ω = 0 vs 0.5; "
+    emit(out, "fig1_model", "schematic (a); illustration (b): head-to-tail sum of r^t e^{iωt} over 40 steps, r = 0.95, ω = 0 vs 0.5; "
          "(c) one neuron without reset, r = 0.99, input mean 0.03 + noise, ω = 0 vs 0.15 (Proposition 1)",
          [("fig1a_schematic", p1a_schematic, (FULL, 2.5), "Model"), ("fig1b_phasor_sum", p1b_phasor, (HALF, 2.6), "Sum of the last 40 inputs, $r = 0.95$"),
           ("fig1c_one_neuron", p1c_neuron, (HALF, 2.3), "One neuron without reset, $r = 0.99$")], layout)
@@ -333,9 +333,9 @@ def _fig2_data():
 
 def _fig2_groups(d, field):
     return [("Short memory\n(reset)", [("rot", [r[field] for r in d["rot_short"]]), ("norot", [r[field] for r in d["norot_short"]]),
-            ("lif_short", [r[field] for r in d["lif_short"]])]),
+                                                       ("lif_short", [r[field] for r in d["lif_short"]])]),
             ("Long memory\n(no reset)", [("rot", [r[field] for r in d["rot_long"]]), ("norot", [r[field] for r in d["norot_long"]]),
-            ("lif_long", [r[field] for r in d["lif_long"]])])]
+                                                            ("lif_long", [r[field] for r in d["lif_long"]])])]
 
 
 def fig2(out: Path):
