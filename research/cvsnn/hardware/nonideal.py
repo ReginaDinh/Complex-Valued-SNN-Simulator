@@ -28,13 +28,13 @@ import torch
 
 @dataclass
 class DeviceConfig:
-    weight_bits: int | None = None  # conductance levels per device = 2**bits; None = continuous
-    prog_noise: float = 0.0         # std of programming error, fraction of G_max
-    read_noise: float = 0.0         # std of per-read device noise, fraction of G_max
-    drift_nu: float = 0.0           # drift exponent (PCM ~0.05; 0 = none)
-    drift_time: float = 1.0         # t / t0 at evaluation time
-    adc_bits: int | None = None     # column ADC resolution; None = ideal
-    adc_range: float = 2.0          # ADC full scale = ±adc_range * V_th
+    weight_bits: int | None = None   # conductance levels per device = 2**bits; None = continuous
+    prog_noise: float = 0.0          # std of programming error, fraction of G_max
+    read_noise: float = 0.0          # std of per-read device noise, fraction of G_max
+    drift_nu: float = 0.0            # drift exponent (PCM ~0.05; 0 = none)
+    drift_time: float = 1.0          # t / t0 at evaluation time
+    adc_bits: int | None = None      # column ADC resolution; None = ideal
+    adc_range: float = 2.0           # ADC full scale = ±adc_range * V_th
 
     @property
     def ideal(self) -> bool:
