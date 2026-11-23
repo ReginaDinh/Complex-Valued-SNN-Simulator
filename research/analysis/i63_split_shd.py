@@ -19,7 +19,7 @@ from pathlib import Path
 
 from cvsnn.utils import mean_ci95
 
-FIRST = "cand_long_fw003"  # the rotating long-memory network, compared with every other model
+FIRST = "cand_long_fw003"   # the rotating long-memory network, compared with every other model
 NAMES = {"cand_long_fw003": "rotating, long memory", "cand_longnorot_fw001": "no rotation, long memory",
          "lif_fw2_d11_fw001": "LIF, long memory", "lif_short_fw003": "LIF, short memory",
          "se_adlif_fw001": "SE-adLIF", "brf_fw003": "BRF (bug, invalid)", "brfv2_fw003": "BRF (fixed)", "cand_longnorm_slowfw": "rotating + LRU norm"}
