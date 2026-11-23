@@ -92,7 +92,7 @@ def trial(method: str, n: int, m: int, T: int, sigma: float, res: float, seed: i
     est = steps + sigma * torch.randn(T, 2, generator=g, dtype=torch.float64)  # the agent's step estimates
     agent_true = 0.5 + steps.sum(0)
     agent_est = 0.5 + est.sum(0)
-    rel_true = pos - agent_true                                               # egocentric ground truth
+    rel_true = pos - agent_true                                                # egocentric ground truth
     fpe = method.startswith("fpe")
     gc = torch.Generator().manual_seed(seed + 1)
     lo, hi = (0.0, 1.0) if method.endswith("allo") else (-1.0, 1.0)     # the level code spans the map's frame
@@ -112,7 +112,7 @@ def trial(method: str, n: int, m: int, T: int, sigma: float, res: float, seed: i
     else:
         grid = grid2d(-1.0, 1.0, h)
         gcodes = code.value(grid)
-        rel0 = pos - 0.5                                                        # agent starts at the centre
+        rel0 = pos - 0.5                                                         # agent starts at the centre
         record = (objs * code.value(rel0)).sum(0, keepdim=True)
         if method == "fpe_ego":
             for t in range(T):
