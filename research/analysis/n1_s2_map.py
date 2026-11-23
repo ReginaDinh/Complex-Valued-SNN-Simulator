@@ -6,16 +6,16 @@
 M objects sit at fixed positions in [0, 1]^2. The agent starts at (0.5, 0.5) and takes T random steps (each
 component U(-0.03, 0.03)). It does not know its steps exactly: its estimate of each step has Gaussian error
 (std sigma). Questions about the map are egocentric (relative to the agent's TRUE position):
-  (a) where is object k relative to me?   (RMSE over objects)
-  (b) which object is at relative position q?   (inverse query at each object's true relative position; accuracy)
+  (a) where is object k relative to me?  (RMSE over objects)
+  (b) which object is at relative position q?  (inverse query at each object's true relative position; accuracy)
 Codes at equal real numbers: N phasors (2N reals) vs 2N bipolar neurons.
   fpe 2D   : value(p) = exp(j theta . p), theta_n ~ U(-pi b, pi b)^2; value(p) value(q) = value(p + q)
   level 2D : value(x, y) = level_x(x) * level_y(y) (two independent piecewise level codes, elementwise product)
 Ways to keep the map (record r = sum_k object_k (x) value(position_k)):
-  1 fpe_ego   : egocentric map; after every step r <- r * value(-estimated step): one product, no decoding
-  2 fpe_allo  : allocentric map + the agent's estimated position kept as two numbers; answer = decode - position
+  1 fpe_ego    : egocentric map; after every step r <- r * value(-estimated step): one product, no decoding
+  2 fpe_allo   : allocentric map + the agent's estimated position kept as two numbers; answer = decode - position
   3 level_allo : as 2 with the level code (the strong real-valued baseline)
-  4 level_ego : egocentric map with the level code: every step decodes all M objects, shifts them, re-encodes
+  4 level_ego  : egocentric map with the level code: every step decodes all M objects, shifts them, re-encodes
 The path-integration error (the estimated position minus the true one) is the same for all four.
 Prediction written before running: 1 = 2 = 3 in accuracy (limited by recall and the path error); 4 gets worse with T
 (decoding errors compound) and costs M decodes per step. The phasor advantage would then be only: an egocentric map
@@ -38,7 +38,7 @@ STEP = 0.03
 def grid2d(lo: float, hi: float, h: float) -> torch.Tensor:
     ax = torch.arange(lo, hi + 1e-9, h, dtype=torch.float64)
     X, Y = torch.meshgrid(ax, ax, indexing="ij")
-    return torch.stack([X.reshape(-1), Y.reshape(-1)], -1)              # (G, 2)
+    return torch.stack([X.reshape(-1), Y.reshape(-1)], -1)          # (G, 2)
 
 
 class FPE2:
@@ -46,7 +46,7 @@ class FPE2:
         self.n = n
         self.theta = (torch.rand(n, 2, generator=g, dtype=torch.float64) * 2 - 1) * math.pi * b
 
-    def value(self, p: torch.Tensor) -> torch.Tensor:                   # p (K, 2) -> (K, N)
+    def value(self, p: torch.Tensor) -> torch.Tensor:                 # p (K, 2) -> (K, N)
         return torch.polar(torch.ones(p.shape[0], self.n, dtype=torch.float64), p @ self.theta.T)
 
     def symbols(self, k: int, g: torch.Generator) -> torch.Tensor:
@@ -67,8 +67,8 @@ class Level2:
         self.n, self.lo, self.hi = n, lo, hi
         self.lx, self.ly = Level(n, g, pieces), Level(n, g, pieces)
 
-    def value(self, p: torch.Tensor) -> torch.Tensor:                   # map [lo, hi] to the code's [0, 1]
-        u = (p - self.lo) / (self.hi - self.lo)
+    def value(self, p: torch.Tensor) -> torch.Tensor:
+        u = (p - self.lo) / (self.hi - self.lo)                       # map [lo, hi] to the code's [0, 1]
         return self.lx.value(u[:, 0]) * self.ly.value(u[:, 1])
 
     def symbols(self, k: int, g: torch.Generator) -> torch.Tensor:
@@ -87,12 +87,12 @@ def decode(code, x: torch.Tensor, grid: torch.Tensor, grid_codes: torch.Tensor) 
 
 def trial(method: str, n: int, m: int, T: int, sigma: float, res: float, seed: int, h: float) -> dict:
     g = torch.Generator().manual_seed(seed)
-    pos = torch.rand(m, 2, generator=g, dtype=torch.float64)            # true object positions
+    pos = torch.rand(m, 2, generator=g, dtype=torch.float64)                  # true object positions
     steps = (torch.rand(T, 2, generator=g, dtype=torch.float64) * 2 - 1) * STEP
     est = steps + sigma * torch.randn(T, 2, generator=g, dtype=torch.float64)  # the agent's step estimates
     agent_true = 0.5 + steps.sum(0)
     agent_est = 0.5 + est.sum(0)
-    rel_true = pos - agent_true                                         # egocentric ground truth
+    rel_true = pos - agent_true                                               # egocentric ground truth
     fpe = method.startswith("fpe")
     gc = torch.Generator().manual_seed(seed + 1)
     lo, hi = (0.0, 1.0) if method.endswith("allo") else (-1.0, 1.0)     # the level code spans the map's frame
@@ -105,18 +105,18 @@ def trial(method: str, n: int, m: int, T: int, sigma: float, res: float, seed: i
         record = (objs * code.value(pos)).sum(0, keepdim=True)
         p_hat = decode(code, code.unbind(record, objs), grid, gcodes)
         rel_hat = p_hat - agent_est
-        ops["query"] = grid.shape[0] * code.n                           # one decode
+        ops["query"] = grid.shape[0] * code.n                                   # one decode
         # inverse query at relative position q: look up allocentric q + estimated position
         q_codes = code.value(rel_true + agent_est)
         inv = code.sim(code.unbind(record, q_codes), objs).argmax(-1)
     else:
         grid = grid2d(-1.0, 1.0, h)
         gcodes = code.value(grid)
-        rel0 = pos - 0.5                                                # agent starts at the centre
+        rel0 = pos - 0.5                                                        # agent starts at the centre
         record = (objs * code.value(rel0)).sum(0, keepdim=True)
         if method == "fpe_ego":
             for t in range(T):
-                record = record * code.value(-est[t:t + 1])             # shift every object at once
+                record = record * code.value(-est[t:t + 1])                     # shift every object at once
             ops["step"] = code.n
         else:   # level_ego: decode, shift, re-encode every object at every step
             for t in range(T):
@@ -132,7 +132,7 @@ def trial(method: str, n: int, m: int, T: int, sigma: float, res: float, seed: i
             "ops_per_step": ops["step"], "ops_per_query": ops["query"]}
 
 
-def run(method: str, n: int, m: int, T: int, sigma: float, res: float, trials: int, h: float, seed0=0):
+def run(method, n, m, T, sigma, res, trials, h, seed0=0):
     rs = [trial(method, n, m, T, sigma, res, seed0 + 31 * t, h) for t in range(trials)]
     return {k: sum(r[k] for r in rs) / len(rs) for k in rs[0]}
 
@@ -143,7 +143,7 @@ def main() -> None:
     a = ap.parse_args()
     trials = 2 if a.quick else 8
     N = 256 if a.quick else 1024
-    h = 0.04            # decoding grid step (the same for every method)
+    h = 0.04          # decoding grid step (the same for every method)
     Ms = [4, 16] if a.quick else [4, 16, 32]
     Ts = [0, 10, 40] if a.quick else [0, 10, 40, 100]
     sigma = 0.002
@@ -168,12 +168,12 @@ def main() -> None:
     (OUT / "results.json").write_text(json.dumps({"N_complex": N, "sigma": sigma, "grid_step": h, "rows": rows}, indent=2))
     L = [f"# N1-S2: egocentric spatial map for a moving agent (N = {N} phasors / {2 * N} bipolar, step noise {sigma}, grid {h}, {trials} trials)", ""]
     for m in Ms:
-        L += [f"## M = {m} objects", "", "| method | resolution | " + " | ".join(f"RMSE T={T}" for T in Ts) + " | "
-              + " | ".join(f"inverse acc T={T}" for T in Ts) + " | ops/step | ops/query |", "|---" * (2 * len(Ts) + 4) + "|"]
+        L += [f"## M = {m} objects", "", "| method | resolution | " + " | ".join(f"RMSE T={T}" for T in Ts) + " | " +
+              " | ".join(f"inverse acc T={T}" for T in Ts) + " | ops/step | ops/query |", "|---" * (2 * len(Ts) + 4) + "|"]
         for meth in methods:
             rs = [r for r in rows if r["M"] == m and r["method"] == meth]
-            L.append(f"| {meth} | {rs[0]['res']:g} | " + " | ".join(f"{r['rmse']:.4f}" for r in rs) + " | "
-                     + " | ".join(f"{r['inverse_acc']:.3f}" for r in rs) + f" | {rs[-1]['ops_per_step']:,.0f} | {rs[-1]['ops_per_query']:,.0f} |")
+            L.append(f"| {meth} | {rs[0]['res']:g} | " + " | ".join(f"{r['rmse']:.4f}" for r in rs) + " | " +
+                     " | ".join(f"{r['inverse_acc']:.3f}" for r in rs) + f" | {rs[-1]['ops_per_step']:,.0f} | {rs[-1]['ops_per_query']:,.0f} |")
         pe = [r for r in rows if r["M"] == m and r["method"] == "fpe_ego"]
         L += ["", "Path-integration error alone (same for all): " + ", ".join(f"T={r['T']}: {r['path_err']:.4f}" for r in pe), ""]
     (OUT / "summary.md").write_text("\n".join(L) + "\n")
