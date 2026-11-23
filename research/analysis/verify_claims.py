@@ -52,7 +52,7 @@ def n1_gradient_window() -> dict:
 def _gaps(theta: float, N: int) -> tuple[float, float]:
     pts = np.sort(np.mod(np.arange(N) * theta, 2 * np.pi))
     gaps = np.diff(np.concatenate([pts, [pts[0] + 2 * np.pi]]))
-    return gaps.min() * N / (2 * np.pi), gaps.max() * N / (2 * np.pi)  # 1.0 = perfectly even
+    return gaps.min() * N / (2 * np.pi), gaps.max() * N / (2 * np.pi)   # 1.0 = perfectly even
 
 
 def n2_golden_phases() -> dict:
@@ -137,7 +137,7 @@ def n5_identities() -> dict:
         "Binet at integers (real part)": [round(float(z.real), 9) for z in binet],
         "Binet imag at integers": [round(float(z.imag), 12) for z in binet],
         "Binet at t=2.5 (complex)": [float(((PHI**half - PHI**-half * np.exp(1j * np.pi * half)) / 5**0.5).real),
-                                     float(((PHI**half - PHI**-half * np.exp(1j * np.pi * half)) / 5**0.5).imag)],
+                                    float(((PHI**half - PHI**-half * np.exp(1j * np.pi * half)) / 5**0.5).imag)],
     }
 
 
