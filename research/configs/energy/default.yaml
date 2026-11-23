@@ -1,0 +1,22 @@
+# Energy per operation in picojoules (pJ). Edit or copy this file per target chip.
+#
+# Digital numbers: Horowitz, "Computing's energy problem (and what we can do about it)", ISSCC 2014,
+# 45 nm process. They are for relative comparison between models; absolute values depend on
+# the process node and the chip. Replace with figures of your target platform when known.
+precision: int8          # int8 | int16 | int32 | fp16 | fp32
+digital:
+  int8:  {add: 0.03, mul: 0.2}
+  int16: {add: 0.05, mul: 0.8}    # interpolated between int8 and int32 (not in the paper's table)
+  int32: {add: 0.1,  mul: 3.1}
+  fp16:  {add: 0.4,  mul: 1.1}
+  fp32:  {add: 0.9,  mul: 3.7}
+  sram_read_64bit: 10.0           # 8 KB SRAM, per 64-bit word (Horowitz 2014)
+  sqrt_div_as_mults: 4            # cost of one sqrt/div, counted as this many multiplies (assumption)
+
+# Analog crossbar: PLACEHOLDER values (order-of-magnitude guesses). They must be replaced
+# with measured or datasheet values of the actual memristor/PCM array, DAC and ADC.
+analog:
+  device_read: 0.01       # one device read (V * I * t)
+  row_pulse_1bit: 0.05    # drive one row with a binary spike pulse
+  row_dac: 0.5            # drive one row with a multi-bit analog value (DAC), e.g. cos(theta)
+  adc_conversion: 1.0     # one column ADC conversion
