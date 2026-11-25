@@ -20,7 +20,7 @@ def _fig():
 
 def test_clear_text_is_not_reported():
     fig, ax = _fig()
-    ax.test(0.5, 1.0, "Clear", ha="center", va="center")
+    ax.text(0.5, 1.0, "Clear", ha="center", va="center")
     assert clashes(fig) == []
     plt.close(fig)
 
