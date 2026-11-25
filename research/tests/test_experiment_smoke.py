@@ -18,7 +18,7 @@ def test_iso_phase_known_answer(tmp_path):
         assert (out / f).exists()
 
 
-def test_hardware_config_runs_and_reports_platform(tmp_path):
+def test_hardware_config_runs_and_reports_platforms(tmp_path):
     cfg = Path(__file__).resolve().parents[1] / "configs" / "iso_phase_hw.yaml"
     out = main([str(cfg), "--seeds", "1", "--steps", "40", "--out", str(tmp_path)])
     with open(out / "summary.csv") as f:
