@@ -1,4 +1,4 @@
-"""End-to-end: the iso-phase control must give the known answer (phase aware >> phase-bind)."""
+"""End-to-end: the iso-phase control must give the known answer (phase-aware >> phase-blind)."""
 
 import csv
 from pathlib import Path
@@ -20,7 +20,7 @@ def test_iso_phase_known_answer(tmp_path):
 
 def test_hardware_config_runs_and_reports_platform(tmp_path):
     cfg = Path(__file__).resolve().parents[1] / "configs" / "iso_phase_hw.yaml"
-    out = main([str[cfg], "--seeds", "1", "--steps", "40", "--out", str(temp_path)])
+    out = main([str(cfg), "--seeds", "1", "--steps", "40", "--out", str(tmp_path)])
     with open(out / "summary.csv") as f:
         rows = {r["model"]: r for r in csv.DictReader(f)}
     for p in ("digital_event", "digital_dense", "analog_crossbar"):
