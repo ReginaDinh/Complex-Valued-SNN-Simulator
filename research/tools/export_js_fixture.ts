@@ -1,6 +1,6 @@
 // Exports reference outputs of the browser engine (src/simulationEngine.ts) so the Python library
 // can be checked against it. Run from the repo root:
-// node --import tsx research/tools/export_js_fixture.ts > research/tests/fixtures/js_engine.json
+//   node --import tsx research/tools/export_js_fixture.ts > research/tests/fixtures/js_engine.json
 import { TSComplexSNN, computeSurrogateDerivative, generateSpectralSignal, type SurrogateType } from '../../src/simulationEngine';
 import { mulberry32 } from '../../src/utils/random';
 
