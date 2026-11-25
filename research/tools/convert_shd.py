@@ -2,7 +2,7 @@
 
     cd research && .venv/bin/python -I tools/convert_shd.py data/shd_raw data/shd.npz
     cd research && .venv/bin/python -I tools/convert_shd.py data/shd_raw data/shd140.npz --channels 140 --dt 0.01 --steps 100 --align left
-                                        (I66: standard 20-class SHD, 140 channels, 10 ms bins from t = 0)
+                                                         (I66: standard 20-class SHD, 140 channels, 10 ms bins from t = 0)
 
 The raw folder holds shd_train.h5 and shd_test.h5 (unzipped from zenkelab.org/datasets/shd/, MD5 checked against its
 md5sums.txt). Needs h5py (dependency group "data" in pyproject.toml).
