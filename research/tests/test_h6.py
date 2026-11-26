@@ -417,7 +417,7 @@ def test_assoc_recall_task_and_fast_weights_recall_a_stored_value():
     from cvsnn.layers import FastWeights
     x, y = assoc_recall_batch(16, pairs=3, generator=torch.Generator().manual_seed(0))
     assert x.shape == (85, 16, 17) and y.shape == (16,)
-    assert torch.equal(x[:40, :, :8].sum((0, 2)), torch.full((16,), 3.0))      # 3 keys written
+    assert torch.equal(x[:40, :, :8].sum((0, 2)), torch.full((16,), 3.0))       # 3 keys written
     assert torch.equal(x[80, :, 16], torch.ones(16))                             # query flag at the first tail step
     # a fast-weight layer whose projections are identities stores v k^H and returns A q: exact recall
     for complex_ in (False, True):
@@ -499,11 +499,11 @@ def test_i21_key_stats_ideal_keys():
     P, nk = 4, TASK["n_keys"]
     x, _ = assoc_recall_batch(16, pairs=P, generator=torch.Generator().manual_seed(0), **TASK)
     T, B, _ = x.shape
-    ident = x[:, :, :nk]    # (T, B, 8): which key is on, if any
+    ident = x[:, :, :nk]                                                         # (T, B, 8): which key is on, if any
     k = torch.zeros(T, B, 2, nk)
     k[..., :] = ident.unsqueeze(2)
-    k[ident.sum(-1) == 0] = torch.eye(nk)[0] * 0 + 1 / nk ** 0.5   # silent steps: some unit vector
-    beta = (ident.sum(-1) > 0).float().unsqueeze(-1).expand(T, B, 2).clone()      
+    k[ident.sum(-1) == 0] = torch.eye(nk)[0] * 0 + 1 / nk ** 0.5                # silent steps: some unit vector
+    beta = (ident.sum(-1) > 0).float().unsqueeze(-1).expand(T, B, 2).clone()
     beta[TASK["window"]:] = 0
     for cplx in (False, True):
         kk = torch.complex(k, torch.zeros_like(k)) if cplx else k
@@ -740,7 +740,7 @@ def test_i29_context_gate():
         g = m.linears[0].weight_re.grad
         assert torch.all(g[off] == 0) and g[~off].abs().sum() > 0
     ov = lambda a, b: (mk[a] * mk[b]).sum().item()
-    assert ov(0, 1) > ov(0, 3)  # phase gate: neighbours overlap more than opposite contexts
+    assert ov(0, 1) > ov(0, 3)   # phase gate: neighbours overlap more than opposite contexts
 
 
 def test_i40_real_input_transforms():
@@ -770,7 +770,7 @@ def test_i41f_phasor_bundle_readback():
     bound = (keys * x).reshape(30, 2, 4, 16)
     dec = (keys.conj().reshape(bound.shape) * bound.sum(2, keepdim=True)).reshape(x.shape)
     err = dec - x                                               # crosstalk of the 3 other samples in each bundle
-    assert abs(err.abs().pow(2).mean().item() - 3.0) < 0.3         # power ~ K - 1 for unit-magnitude samples
+    assert abs(err.abs().pow(2).mean().item() - 3.0) < 0.3      # power ~ K - 1 for unit-magnitude samples
     # a bundle of one is lossless
     one = (keys.conj() * (keys * x))
     assert torch.allclose(one, x, atol=1e-5)
@@ -881,7 +881,7 @@ def test_i61b_standard_adlif_runs_and_clamps():
     from cvsnn.layers import LIF
     n = LIF(6, 0.5, 0.85, True, "soft", adapt={"style": "bittar"})
     with torch.no_grad():
-        n.a.fill_(5.0)       # outside [-1, 1]: clamped in the forward pass
+        n.a.fill_(5.0)      # outside [-1, 1]: clamped in the forward pass
     s, u, _ = n(torch.randn(30, 2, 6))
     assert s.shape == (30, 2, 6) and torch.isfinite(u).all()
     from experiments.ei54 import _run, phase_jobs
@@ -944,7 +944,7 @@ def test_i65_se_adlif_and_brf():
     u_hat = (1 - alpha) * n.in_gain * x[0, 0]
     assert torch.allclose(pot[0, 0], u_hat, atol=1e-6) and s[0, 0, 1] == 1 and s[0, 0, 0] == 0
     with torch.no_grad():
-        n.a_hat.fill_(3.0)                  # outside [0, 1]: clamped in the forward pass
+        n.a_hat.fill_(3.0)                          # outside [0, 1]: clamped in the forward pass
     assert torch.isfinite(n(torch.randn(40, 2, 3))[1]).all()
     # BRF: on the divergence boundary (b' = 0, no spikes) |1 + p + i omega| = 1; with b' > 0 the state decays
     b = LIF(4, 1e9, 0.85, True, "none", adapt={"style": "brf"})
@@ -986,7 +986,7 @@ def test_i69_ten_tasks_extend_the_five_task_sequence():
     from experiments.ei54 import ROOT, _run, phase_jobs
     if not (ROOT / "data/mnist.npz").exists():
         pytest.skip("needs research/data/mnist.npz")
-    j = [x for x in phase_jobs(1, 2, 2, lrs=[(1e-2, 1e-3)], variants=("cand_long_fw003",)) if x["two_heads"]][0], "mnist": True, "hidden": 20}
+    j = {**[x for x in phase_jobs(1, 2, 2, lrs=[(1e-2, 1e-3)], variants=("cand_long_fw003",)) if x["two_heads"]][0], "mnist": True, "hidden": 20}
     a, b = _run(j), _run({**j, "n_tasks": 10})
     assert b["n_tasks"] == 10 and len(b["history"][-1]["ecl"]) == 10 and len(b["seen_avg"]) == 10
     assert b["history"][1]["ecl"][:5] == a["history"][1]["ecl"]   # tasks 0-4 are the same tasks, the same training up to task 1
@@ -1080,7 +1080,7 @@ def test_n19_gated_rnn_reference_matches_parameters_and_runs():
         h = _matched_hidden(cfg, C_ECL + 17, 16)
         p_rnn = SequenceClassifier(C_ECL + 17, 16, ModelConfig(**{**cfg, "hidden": [h]})).num_params()
         p_lif = SequenceClassifier(C_ECL + 17, 16, ModelConfig(**{**cfg, "rnn_cell": None})).num_params()
-        assert abs(p_rnn - p_lif) / p_lif < 0.05                         # matched to the LIF network within 5%
+        assert abs(p_rnn - p_lif) / p_lif < 0.05                          # matched to the LIF network within 5%
         m = SequenceClassifier(C_ECL + 17, 16, ModelConfig(**{**cfg, "hidden": [h]}))
         assert isinstance(m.linears[0], torch.nn.Identity) and m.fw is not None   # same plastic synapse, non-spiking hidden layer
     j = [x for x in phase_jobs(1, 3, 2, lrs=[(3e-3, 1e-3)], variants=("lstm_fw003",)) if x["two_heads"]][0]
