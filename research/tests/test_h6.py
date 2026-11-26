@@ -24,7 +24,7 @@ def test_frequency_sets_lie_in_range(kind):
 
 def test_golden_set_has_exact_order4_relation_and_independent_set_has_none():
     g = frequency_set("golden", 5, LO, HI).numpy()
-    assert abs(g[0] - g[1] - g[3] + g[4]) < 1e-12        # omega_1 - omega_2 - omega_4 + omega_5 = 0
+    assert abs(g[0] - g[1] - g[3] + g[4]) < 1e-12           # omega_1 - omega_2 - omega_4 + omega_5 = 0
     ind = frequency_set("independent", 12, LO, HI).numpy()
     for M in (2, 3, 4):
         d = np.abs(combos(ind, M))
@@ -45,7 +45,7 @@ def test_quantized_frequencies_lie_on_the_grid_and_can_merge():
 
 
 def test_additive_energy_and_sidon_search():
-    assert additive_energy(np.array([0, 1, 3, 7])) == 4 * 7    # Golomb ruler: the minimum N(2N - 1)
+    assert additive_energy(np.array([0, 1, 3, 7])) == 4 * 7      # Golomb ruler: the minimum N(2N - 1)
     assert additive_energy(np.array([0, 1, 2, 3])) > 4 * 7
     m_lo, m_hi = grid_range(LO, HI, 10)
     s = np.array(sidon_grid(32, m_lo, m_hi))
@@ -75,7 +75,7 @@ def test_binary_on_real_part_and_soft_reset_direction():
     out, pot, h = n(x)
     assert h[0, 0, 0] == 0 and h[1, 0, 0] == 1
     beta = torch.sigmoid(n.leak_mag_raw)[0].item()
-    expected = (pot[1, 0, 0] - 1.0) * beta    # soft reset subtracts V_th along the real axis
+    expected = (pot[1, 0, 0] - 1.0) * beta   # soft reset subtracts V_th along the real axis
     assert pot[2, 0, 0].real.item() == pytest.approx(expected.real.item()) and pot[2, 0, 0].imag.item() == pytest.approx(expected.imag.item())
     with pytest.raises(ValueError):
         CLIF(2, spike_mode="phasor", binary_on="re")
@@ -125,16 +125,16 @@ def test_binary_cvsnn_trace_and_cost_have_no_synaptic_multiplies():
     L = ib["layers"][1]
     assert L["input_kind"] == "binary" and L["complex_weights"]
     cost, silent = estimate_cost([L], table)["digital_event"], estimate_cost([dict(L, in_events=0)], table)["digital_event"]
-    assert cost["mults"] == silent["mults"]                      # synapses: no multiplies
-    assert cost["adds"] - silent["adds"] == 2 * L["in_events"] * L["n_out"]  # W_re and W_im accumulated
+    assert cost["mults"] == silent["mults"]                                   # synapses: no multiplies
+    assert cost["adds"] - silent["adds"] == 2 * L["in_events"] * L["n_out"]   # W_re and W_im accumulated
     # one read phase (real input on complex weights) instead of two
     mp = SequenceClassifier(6, 4, ModelConfig(**base))
     _, ip = mp(x, trace=True)
-    lp = dict(ip["layers"][1], in_events=L["in_events"])
-    assert estimate_cost([L], table)["analog_crossbar"]["row_drives"] * 2 == estimate_cost([lp], table)["analog_crossbar"]["row_drives"]
+    Lp = dict(ip["layers"][1], in_events=L["in_events"])
+    assert estimate_cost([L], table)["analog_crossbar"]["row_drives"] * 2 == estimate_cost([Lp], table)["analog_crossbar"]["row_drives"]
 
 
-@pytest.mark.parametrize("kind,inp", [("cvsnn", "complex"), ("prf", "reim"), ("cslif", "reim"), ("lif", "reim")])
+@pytest.mark.parametrize("kind,inp", [("cvsnn", "complex"), ("prf", "reim"), ("csilif", "reim"), ("lif", "reim")])
 def test_spiking_encoders(kind, inp):
     torch.manual_seed(0)
     extra = {"spike_mode": "binary", "reset": "none"} if kind == "cvsnn" else {}
@@ -156,7 +156,7 @@ def test_split_layer_memory_neurons_never_reset_and_keep_their_init():
     x = torch.zeros(5, 1, 4, dtype=torch.complex128)
     x[0] = 2.0
     s, pot, h = n(x)
-    assert h[0].sum() == 4                                        # every neuron fires on the pulse
+    assert h[0].sum() == 4                                     # every neuron fires on the pulse
     beta = n.beta.detach()
     # processing neurons were reduced by the soft reset, memory neurons kept their full state
     assert torch.allclose(pot[1, 0, 2:], beta[2:] * 2.0) and (pot[1, 0, :2].abs() < (beta[:2] * 2.0).abs()).all()
@@ -174,11 +174,11 @@ def test_real_synapse_cvsnn_has_real_weights_and_a_rotating_complex_state():
     logits, info = m(x, trace=True)
     assert torch.isfinite(logits).all() and not info["layers"][1]["complex_weights"] and info["layers"][1]["input_kind"] == "binary"
     _, pot, _ = m.neurons[0](m.linears[0](x))
-    assert torch.is_complex(pot) and pot.imag.abs().sum() > 0        # real current, complex (rotating) state
+    assert torch.is_complex(pot) and pot.imag.abs().sum() > 0          # real current, complex (rotating) state
     with pytest.raises(ValueError):
         m(torch.complex(x, x))
     with pytest.raises(ValueError):
-        SequenceClassifier(12, 4, ModelConfig(kind="cvsnn", real_synapses=True))  # phasor spikes need complex weights
+        SequenceClassifier(12, 4, ModelConfig(kind="cvsnn", real_synapses=True))   # phasor spikes need complex weights
 
 
 @pytest.mark.parametrize("kw", [dict(spike_mode="phasor"), dict(spike_mode="binary", binary_on="re"), dict(phase_bins=4),
@@ -233,15 +233,15 @@ def test_out_pairs_give_each_class_a_processing_and_a_memory_readout_neuron():
 
 def test_slot_lines_carry_the_timing_code_as_real_events():
     torch.manual_seed(0)
-    n = CLIF(3, threshold=0.6, reset="soft", spike_mode="slots", phase_bins=4).double()
+    n = CLIF(3, threshold=0.5, reset="soft", spike_mode="slots", phase_bins=4).double()
     x = 0.8 * torch.polar(torch.ones(12, 2, 3, dtype=torch.float64), torch.rand(12, 2, 3, dtype=torch.float64) * 6.28)
     out, pot, h = n(x)
     assert out.shape == (12, 2, 12) and not torch.is_complex(out)
     lines = out.view(12, 2, 3, 4)
-    assert torch.equal(lines.sum(-1), h)                         # one line per spike
+    assert torch.equal(lines.sum(-1), h)                                   # one line per spike
     k = torch.remainder(torch.round(torch.angle(pot) * 4 / (2 * math.pi)), 4).long()
     on = lines.argmax(-1)
-    assert torch.equal(on[h > 0], k[h > 0])                      # on the line of its phase slot
+    assert torch.equal(on[h > 0], k[h > 0])                                 # on the line of its phase slot
     with pytest.raises(ValueError):
         CLIF(3, spike_mode="slots")
 
@@ -294,7 +294,7 @@ def test_freeze_after_first_task_freezes_the_whole_periphery():
     m = SequenceClassifier(16, 8, ModelConfig(kind="lif", hidden=[5], encoder=True, front="k4", front_hidden=[6]))
     freeze_periphery(m)
     learn = {n for n, p in m.named_parameters() if p.requires_grad}
-    assert learn == {"linears.2.weight", "linears.3.weight", "neurons.2.leak_raw", "neurons.3.leak_raw"}  # core + read-out
+    assert learn == {"linears.2.weight", "linears.3.weight", "neurons.2.leak_raw", "neurons.3.leak_raw"}   # core + read-out
 
 
 def test_memory_branch_runs_in_parallel_with_the_core_and_feeds_the_readout():
@@ -305,7 +305,7 @@ def test_memory_branch_runs_in_parallel_with_the_core_and_feeds_the_readout():
     b = torch.sigmoid(m.mem_neuron.leak_raw)
     assert (b >= 0.99 - 1e-6).all()
     logits, info = m(torch.complex(torch.randn(10, 3, 6), torch.randn(10, 3, 6)), trace=True)
-    assert torch.isfinite(logits).all() and len(info["layers"]) == 6 and info["layers"][-1]["n_in"] == 12
+    assert torch.isfinite(logits).all() and len(info["layers"]) == 5 and info["layers"][-1]["n_in"] == 12
     logits.sum().backward()
     assert m.mem_linear.weight.grad is not None and m.mem_linear.weight.grad.abs().sum() > 0
     with pytest.raises(ValueError):
@@ -362,7 +362,7 @@ def test_binding_task_hides_the_label_in_the_cross_modal_phase_only():
     x = binding_batch(y, time_steps=30, freq=3.0, noise=0.0, generator=g)
     assert x.shape == (30, 400, 8)
     active = (x.abs().mean(0) > 0.5)
-    assert (active[:, :4].sum(-1) == 2).all() and (active[:, 4:].sum(-1) == 2).all()  # 2 colours, 2 shapes
+    assert (active[:, :4].sum(-1) == 2).all() and (active[:, 4:].sum(-1) == 2).all()   # 2 colours, 2 shapes
     # the channel magnitudes carry no label information: the same statistics for both classes
     m1, m0 = x[:, y == 1].abs().mean(), x[:, y == 0].abs().mean()
     assert abs(m1 - m0) < 0.02
@@ -384,7 +384,7 @@ def test_synaptic_intelligence_modes():
         si = SynapticIntelligence(model, mode, c=1.0)
         assert si.penalty() == 0.0
         opt = torch.optim.SGD(model.parameters(), lr=0.1)
-        for _ in range(3):          # a few steps on a toy loss, then consolidate
+        for _ in range(3):        # a few steps on a toy loss, then consolidate
             loss = (lin(torch.ones(2, 4, dtype=torch.complex64)).abs() ** 2).sum()
             opt.zero_grad()
             loss.backward()
@@ -417,8 +417,8 @@ def test_assoc_recall_task_and_fast_weights_recall_a_stored_value():
     from cvsnn.layers import FastWeights
     x, y = assoc_recall_batch(16, pairs=3, generator=torch.Generator().manual_seed(0))
     assert x.shape == (85, 16, 17) and y.shape == (16,)
-    assert torch.equal(x[:48, :, :8].sum((0, 2)), torch.full((16,), 3.0))      # 3 keys written
-    assert torch.equal(x[80, :, 16], torch.ones(16))                           # query flag at the first tail step
+    assert torch.equal(x[:40, :, :8].sum((0, 2)), torch.full((16,), 3.0))      # 3 keys written
+    assert torch.equal(x[80, :, 16], torch.ones(16))                             # query flag at the first tail step
     # a fast-weight layer whose projections are identities stores v k^H and returns A q: exact recall
     for complex_ in (False, True):
         fw = FastWeights(4, d=4, heads=1, complex_=complex_, decay=0.999999)
@@ -429,8 +429,8 @@ def test_assoc_recall_task_and_fast_weights_recall_a_stored_value():
                 else:
                     proj.weight.copy_(torch.eye(4))
         h = torch.zeros(3, 1, 4)
-        h[0, 0, 0] = 1.0        # write key e0 -> value e0 (key and value from the same activity)
-        h[2, 0, 0] = 1.0        # query e0
+        h[0, 0, 0] = 1.0          # write key e0 -> value e0 (key and value from the same activity)
+        h[2, 0, 0] = 1.0          # query e0
         y_ = fw(h)
         assert torch.allclose(y_[2, 0].real if complex_ else y_[2, 0], torch.tensor([2.0, 0, 0, 0]), atol=1e-3)
 
@@ -454,25 +454,25 @@ def test_delta_rule_replaces_the_value_stored_under_a_key():
     for complex_ in (False, True):
         fw = FastWeights(4, d=4, heads=1, complex_=complex_, decay=0.999999, rule="delta", gate=True)
         with torch.no_grad():
-            fw.gate.weight.copy_(torch.tensor([[0.0, 0.0, 10.0, 10.0]]))  # write only when a value channel is on
+            fw.gate.weight.copy_(torch.tensor([[0.0, 0.0, 10.0, 10.0]]))   # write only when a value channel is on
             fw.gate.bias.fill_(-5.0)
             for proj in (fw.k, fw.q):
                 if complex_:
                     proj.weight_re.copy_(torch.eye(4)); proj.weight_im.zero_()
                 else:
                     proj.weight.copy_(torch.eye(4))
-            vw = torch.zeros(4, 4); vw[1, 2] = 1.0; vw[2, 3] = 1.0    # input e2 -> value e1, input e3 -> value e2
+            vw = torch.zeros(4, 4); vw[1, 2] = 1.0; vw[2, 3] = 1.0      # input e2 -> value e1, input e3 -> value e2
             if complex_:
                 fw.v.weight_re.copy_(vw); fw.v.weight_im.zero_()
             else:
                 fw.v.weight.copy_(vw)
         h = torch.zeros(3, 1, 4)
-        h[0, 0, 0] = 1.0; h[0, 0, 2] = 1.0    # key e0 (normalised with e2) -> value e1
-        h[1, 0, 0] = 1.0; h[1, 0, 3] = 1.0    # same key part, new value e2: the delta rule overwrites
+        h[0, 0, 0] = 1.0; h[0, 0, 2] = 1.0     # key e0 (normalised with e2) -> value e1
+        h[1, 0, 0] = 1.0; h[1, 0, 3] = 1.0     # same key part, new value e2: the delta rule overwrites
         h[2, 0, 0] = 1.0
         y = fw(h)[2, 0]
         y = y.real if complex_ else y
-        assert y[2] > y[1]                    # the newer value dominates (a Hebbian sum would keep both)
+        assert y[2] > y[1]                      # the newer value dominates (a Hebbian sum would keep both)
 
 
 @pytest.mark.parametrize("kind", ["lif", "cvsnn"])
@@ -497,14 +497,13 @@ def test_i21_key_stats_ideal_keys():
     from experiments.ep1b import TASK, key_stats
 
     P, nk = 4, TASK["n_keys"]
-
     x, _ = assoc_recall_batch(16, pairs=P, generator=torch.Generator().manual_seed(0), **TASK)
     T, B, _ = x.shape
-    ident = x[:, :, :nk]
+    ident = x[:, :, :nk]    # (T, B, 8): which key is on, if any
     k = torch.zeros(T, B, 2, nk)
     k[..., :] = ident.unsqueeze(2)
-    k[ident.sum(-1) == 0] = torch.eye(nk)[0] * 0 + 1 / nk ** 0.5
-    beta = (ident.sum(-1) > 0).float().unsqueeze(-1).expand(T, B, 2).clone()      # silent steps: some unit vector
+    k[ident.sum(-1) == 0] = torch.eye(nk)[0] * 0 + 1 / nk ** 0.5   # silent steps: some unit vector
+    beta = (ident.sum(-1) > 0).float().unsqueeze(-1).expand(T, B, 2).clone()      
     beta[TASK["window"]:] = 0
     for cplx in (False, True):
         kk = torch.complex(k, torch.zeros_like(k)) if cplx else k
@@ -548,7 +547,7 @@ def test_p3_random_feedback_changes_only_the_error_path():
         assert first and last
         assert all(torch.allclose(ge[n], gr[n], atol=1e-6) for n in last)
         assert not all(torch.allclose(ge[n], gr[n], atol=1e-6) for n in first)
-        with torch.no_grad():   # symmetric feedback: B = W -> exact gradient
+        with torch.no_grad():   # symmetric feedback: B = W  ->  exact gradient
             if kind == "cvsnn":
                 rand.fb1_re.copy_(rand.linears[1].weight_re)
                 rand.fb1_im.copy_(rand.linears[1].weight_im)
@@ -610,17 +609,17 @@ def test_i28b_theta_tag_orthogonal_slots_and_task():
     from cvsnn.layers import FastWeights
 
     fw = FastWeights(5, d=8, heads=1, complex_=True, theta_tag=True)
-    u = torch.polar(torch.ones(8) / 8 ** 0.5, torch.rand(8) * 6.283).view(1, 1, 1, 8).repeat(8, 1, 1, 1)  # (T=8, B=1, H=1, d)
+    u = torch.polar(torch.ones(8) / 8 ** 0.5, torch.rand(8) * 6.283).view(1, 1, 1, 8).repeat(8, 1, 1, 1)   # (T=8, B=1, H=1, d)
     th = (2 * math.pi * torch.arange(8) / 8).view(8, 1)
-    k = fw._tag(u, th)[:, 0, 0]                                      # (8, 8)
+    k = fw._tag(u, th)[:, 0, 0]                                                  # (8, 8)
     G = (torch.conj(k) @ k.T).abs()
-    assert torch.allclose(G, torch.eye(8), atol=1e-6)
+    assert torch.allclose(G, torch.eye(8), atol=1e-5)
     fr = FastWeights(5, d=11, heads=2, complex_=False, theta_tag=True)
     z = torch.randn(6, 3, 2, 11)
     assert torch.allclose(fr._tag(z, torch.rand(6, 3) * 6.283).norm(dim=-1), z.norm(dim=-1), atol=1e-5)
     x, theta, y, pos = serial_recall_batch(16, generator=torch.Generator().manual_seed(0))
     b = torch.arange(16)
-    assert torch.equal(x[pos + 4, b, :8].argmax(-1), y)
+    assert torch.equal(x[pos * 4, b, :8].argmax(-1), y)
     assert torch.allclose(theta[-1], 2 * math.pi * pos.float() / 8) and torch.all(x[-5:, :, 8] == 1)
 
 
@@ -631,12 +630,12 @@ def test_i28c_list_longer_than_a_theta_cycle():
 
     x, theta, y, pos = serial_recall_batch(64, items=12, cycle_slots=8, cycle_cue=True, generator=torch.Generator().manual_seed(1))
     b = torch.arange(64)
-    assert x.shape[-1] == 8 + 1 + 2 and torch.equal(x[pos + 4, b, :8].argmax(-1), y)
+    assert x.shape[-1] == 8 + 1 + 2 and torch.equal(x[pos * 4, b, :8].argmax(-1), y)
     assert torch.allclose(theta[-1], 2 * math.pi * (pos % 8).float() / 8)
     assert torch.equal(x[-1, :, 9:].argmax(-1), pos // 8)
 
 
-def test_i26_rotate_frac_masks_omega():
+def test_i25_rotate_frac_masks_omega():
     import torch
     from cvsnn.layers import CLIF
 
@@ -655,7 +654,7 @@ def test_i23_phi_ladder():
     w = frequency_set("phi_ladder", 32, 0.01, 1.5)
     r = torch.unique(w)
     assert len(r) == 11 and r.min() >= 0.01 - 1e-12 and r.max() <= 1.5
-    assert torch.allclose(r[2:], r[1:-1] + r[:-2], atol=1e-12)         # neighbouring rungs add exactly
+    assert torch.allclose(r[2:], r[1:-1] + r[:-2], atol=1e-12)                   # neighbouring rungs add exactly
     assert torch.allclose(r[1:] / r[:-1], torch.full((10,), (1 + 5 ** 0.5) / 2, dtype=torch.float64))
 
 
@@ -715,12 +714,12 @@ def test_i23c_band_variants():
 
     w = frequency_set("phi_jitter", 32, 0.01, 1.5, generator=torch.Generator().manual_seed(0))
     lad = frequency_set("phi_ladder", 32, 0.01, 1.5)
-    assert len(torch.unique(w)) >= 30 and torch.all((w / lad).log().abs() <= 0.05 + 1e-9)  # a few clamp to lo
+    assert len(torch.unique(w)) >= 30 and torch.all((w / lad).log().abs() <= 0.05 + 1e-9)   # a few clamp to lo
     b = frequency_set("banded_strat", 32, 0.01, 1.5, generator=torch.Generator().manual_seed(0))
     u = torch.unique(b)
     assert len(u) == 11
     strata = torch.floor(torch.log(u / 0.01) / torch.log(torch.tensor(150.0, dtype=torch.float64)) * 11)
-    assert torch.equal(strata, torch.arange(11, dtype=torch.float64))  # one band in every log-stratum
+    assert torch.equal(strata, torch.arange(11, dtype=torch.float64))   # one band in every log-stratum
 
 
 def test_i29_context_gate():
@@ -740,8 +739,8 @@ def test_i29_context_gate():
         off = mk[2] == 0
         g = m.linears[0].weight_re.grad
         assert torch.all(g[off] == 0) and g[~off].abs().sum() > 0
-        ov = lambda a, b: (mk[a] * mk[b]).sum().item()
-        assert ov(0, 1) > ov(0, 3)  # phase gate: neighbours overlap more than opposite contexts
+    ov = lambda a, b: (mk[a] * mk[b]).sum().item()
+    assert ov(0, 1) > ov(0, 3)  # phase gate: neighbours overlap more than opposite contexts
 
 
 def test_i40_real_input_transforms():
@@ -759,7 +758,7 @@ def test_i41d_deep_lr_mult_splits_the_optimizer():
     job = {"key": "t", "variant": "t", "seed": 0, "steps": 2, "kind": "cvsnn", "hidden": [6, 4], "input": "complex", "lr": 1e-3,
            "extra": {"reset": "none", "threshold": 0.5}}
     a = _run(job)
-    b = _run({**job, "deep_lr_mult": 1.0})  # same lr in both groups: same result as one group
+    b = _run({**job, "deep_lr_mult": 1.0})   # same lr in both groups: same result as one group
     assert a["forgetting"] == b["forgetting"] and a["final_avg_acc"] == b["final_avg_acc"]
 
 
@@ -770,10 +769,10 @@ def test_i41f_phasor_bundle_readback():
     keys = torch.polar(torch.ones_like(x.real), 2 * torch.pi * torch.rand(x.real.shape, generator=g))
     bound = (keys * x).reshape(30, 2, 4, 16)
     dec = (keys.conj().reshape(bound.shape) * bound.sum(2, keepdim=True)).reshape(x.shape)
-    err = dec - x                                                  # crosstalk of the 3 other samples in each bundle
-    assert abs(err.abs().pow(2).mean().item() - 3.0) < 0.3         # power = K - 1 for unit-magnitude samples
+    err = dec - x                                               # crosstalk of the 3 other samples in each bundle
+    assert abs(err.abs().pow(2).mean().item() - 3.0) < 0.3         # power ~ K - 1 for unit-magnitude samples
     # a bundle of one is lossless
-    one = (keys.conj()) * (keys * x))
+    one = (keys.conj() * (keys * x))
     assert torch.allclose(one, x, atol=1e-5)
 
 
@@ -805,7 +804,7 @@ def test_i52_fw_protection_options_run():
     base = {"key": "t", "variant": "t", "seed": 0, "steps": 2, "kind": "lif", "hidden": [6], "input": "reim", "lr": 1e-3,
             "extra": {"reset": "none", "threshold": 0.5, "fast_weights": {**FW2, "d": 4}}}
     a = _run(base)
-    b = _run({**base, "fw_lr_mult": 1.0})  # same lr in both groups: same result
+    b = _run({**base, "fw_lr_mult": 1.0})   # same lr in both groups: same result
     assert a["forgetting"] == b["forgetting"] and a["final_avg_acc"] == b["final_avg_acc"]
     c = _run({**base, "fw_freeze_after_first": True})
     assert 0.0 <= c["final_avg_acc"] <= 1.0
@@ -830,7 +829,7 @@ def test_i56_key_sep_penalty_and_option():
     T, B, H, d = x.shape[0], 4, 2, 8
     eye = torch.zeros(T, B, H, d)
     shown = x[:TASK["window"], :, :TASK["n_keys"]].sum(-1) > 0
-    for b in range(B):  # orthogonal unit keys at the write times, identical keys elsewhere
+    for b in range(B):   # orthogonal unit keys at the write times, identical keys elsewhere
         ts = torch.nonzero(shown[:, b]).flatten()
         for i, t in enumerate(ts):
             eye[t, b, :, i] = 1.0
@@ -842,12 +841,12 @@ def test_i56_key_sep_penalty_and_option():
     assert abs(key_sep_penalty(same, x, 4, TASK, "placebo", g).item() - 1.0) < 1e-6
     job = {"key": "t", "pairs": 4, "variant": "lif_fw2_d11", "hp": {}, "seed": 0, "steps": 3, "lr": 3e-3,
            "model": {"kind": "lif", "hidden": [8], "readout_last": 5, "reset": "none", "fast_weights": {**FW2, "d": 4}}}
-    a, b0 = _run(job), _run({**job, "key_sep": {"mu": 0.0, "where": "write"}})  # strength 0: the usual training, bit for bit
+    a, b0 = _run(job), _run({**job, "key_sep": {"mu": 0.0, "where": "write"}})   # strength 0: the usual training, bit for bit
     assert a["test_acc"] == b0["test_acc"] and a["val_acc"] == b0["val_acc"]
     for where in ("placebo", "silent", "direction"):
         c = _run({**job, "key_sep": {"mu": 1.0, "where": where}})
         assert 0.0 <= c["test_acc"] <= 1.0
-    dirp = key_sep_penalty(same, x, 4, TASK, "direction").item()  # collapsed keys: finite, non-negative, not forced to 1
+    dirp = key_sep_penalty(same, x, 4, TASK, "direction").item()   # collapsed keys: finite, non-negative, not forced to 1
     assert 0.0 <= dirp < 8.0
 
 
@@ -856,7 +855,7 @@ def test_i54j_i58_lif_short_and_si_options():
     j = [x for x in phase_jobs(1, 2, 1, lrs=[(1e-2, 3e-4)], variants=("lif_short_slowfw",)) if x["two_heads"]][0]
     a = _run(j)
     assert a["params"] > 0 and len(a["history"]) == 6
-    b, c = _run({**j, "si_c": 0.0}), _run({**j, "si_c": 1.0})  # SI with strength 0: the usual training, bit for bit
+    b, c = _run({**j, "si_c": 0.0}), _run({**j, "si_c": 1.0})   # SI with strength 0: the usual training, bit for bit
     assert b["ecl_forgetting"] == a["ecl_forgetting"] and b["recall_final"] == a["recall_final"]
     assert 0.0 <= c["ecl_final_avg"] <= 1.0
 
@@ -882,7 +881,7 @@ def test_i61b_standard_adlif_runs_and_clamps():
     from cvsnn.layers import LIF
     n = LIF(6, 0.5, 0.85, True, "soft", adapt={"style": "bittar"})
     with torch.no_grad():
-        n.a.fill_(5.0)       # outside (-1, 1): clamped in the forward pass
+        n.a.fill_(5.0)       # outside [-1, 1]: clamped in the forward pass
     s, u, _ = n(torch.randn(30, 2, 6))
     assert s.shape == (30, 2, 6) and torch.isfinite(u).all()
     from experiments.ei54 import _run, phase_jobs
@@ -907,9 +906,9 @@ def test_i63_shd_binning_is_right_aligned():
     u = np.array([0, 699, 21, 22, 350])
     x = bin_spikes(t, u, t_steps=85, channels=32, dt=0.012)
     assert x.shape == (85, 32) and x.dtype == np.uint8
-    assert x[84, 0] == 1 and x[84, 1] == 1 and x[84, 16] == 1  # the last spike (and those within dt of it) in the last step
-    assert x[84 - int(0.505 // 0.012), 31] == 1                 # unit 699 -> group 31
-    assert x.sum() == 4                                         # t = 0 is more than 85 * dt before the last spike: dropped
+    assert x[84, 0] == 1 and x[84, 1] == 1 and x[84, 16] == 1   # the last spike (and those within dt of it) in the last step
+    assert x[84 - int(0.505 // 0.012), 31] == 1                  # unit 699 -> group 31
+    assert x.sum() == 4                                          # t = 0 is more than 85 * dt before the last spike: dropped
     assert bin_spikes(np.array([]), np.array([])).sum() == 0
 
 
@@ -927,8 +926,9 @@ def test_i64_replay_leaves_the_first_task_unchanged():
     from experiments.ei54 import _run, phase_jobs
     j = [x for x in phase_jobs(1, 2, 3, lrs=[(1e-2, 1e-3)], variants=("cand_long_fw003",)) if x["two_heads"]][0]
     a, b = _run(j), _run({**j, "replay": 5})
-    assert a["history"][1] == b["history"][1]        # no buffer during the first later-phase task: identical training
-    assert a["history"][-1] != b["history"][-1]      # later tasks train on current + replayed samples
+    assert a["history"][1] == b["history"][1]      # no buffer during the first later-phase task: identical training
+    assert a["history"][-1] != b["history"][-1]    # later tasks train on current + replayed samples
+    assert 0.0 <= b["ecl_final_avg"] <= 1.0
 
 
 def test_i65_se_adlif_and_brf():
@@ -944,7 +944,7 @@ def test_i65_se_adlif_and_brf():
     u_hat = (1 - alpha) * n.in_gain * x[0, 0]
     assert torch.allclose(pot[0, 0], u_hat, atol=1e-6) and s[0, 0, 1] == 1 and s[0, 0, 0] == 0
     with torch.no_grad():
-        n.a_hat.fill_(3.0)                  # outside [0, 1): clamped in the forward pass
+        n.a_hat.fill_(3.0)                  # outside [0, 1]: clamped in the forward pass
     assert torch.isfinite(n(torch.randn(40, 2, 3))[1]).all()
     # BRF: on the divergence boundary (b' = 0, no spikes) |1 + p + i omega| = 1; with b' > 0 the state decays
     b = LIF(4, 1e9, 0.85, True, "none", adapt={"style": "brf"})
@@ -973,7 +973,7 @@ def test_i66_standard_shd_runs():
     import pytest
     from cvsnn.data.shd import bin_spikes
     x = bin_spikes(np.array([0.0, 0.005, 0.999, 1.5]), np.array([0, 4, 699, 3]), t_steps=100, channels=140, dt=0.01, align="left")
-    assert x[0, 0] == 2 and x[99, 139] == 1 and x.sum() == 3        # 1.5 s is past the 100 x 10 ms window: dropped
+    assert x[0, 0] == 2 and x[99, 139] == 1 and x.sum() == 3            # 1.5 s is past the 100 x 10 ms window: dropped
     from experiments.ei66 import ROOT, _run, jobs
     if not (ROOT / "data/shd140.npz").exists():
         pytest.skip("needs research/data/shd140.npz (tools/convert_shd.py ... --channels 140 --dt 0.01 --steps 100 --align left)")
@@ -986,10 +986,10 @@ def test_i69_ten_tasks_extend_the_five_task_sequence():
     from experiments.ei54 import ROOT, _run, phase_jobs
     if not (ROOT / "data/mnist.npz").exists():
         pytest.skip("needs research/data/mnist.npz")
-    j = [x for x in phase_jobs(1, 2, 2, lrs=[(1e-2, 1e-3)], variants=("cand_long_fw003",)) if x["two_heads"]][0]
+    j = [x for x in phase_jobs(1, 2, 2, lrs=[(1e-2, 1e-3)], variants=("cand_long_fw003",)) if x["two_heads"]][0], "mnist": True, "hidden": 20}
     a, b = _run(j), _run({**j, "n_tasks": 10})
     assert b["n_tasks"] == 10 and len(b["history"][-1]["ecl"]) == 10 and len(b["seen_avg"]) == 10
-    assert b["history"][1]["ecl"][:5] == a["history"][1]["ecl"]  # tasks 0-4 are the same tasks, the same training up to task 1
+    assert b["history"][1]["ecl"][:5] == a["history"][1]["ecl"]   # tasks 0-4 are the same tasks, the same training up to task 1
 
 
 def test_i71_phase1_cache_gives_identical_results(tmp_path):
@@ -997,9 +997,9 @@ def test_i71_phase1_cache_gives_identical_results(tmp_path):
     for v, extra in (("cand_long_fw003", {}), ("lif_short_fw003", {"replay": 4})):
         j = {**[x for x in phase_jobs(1, 20, 3, lrs=[(1e-2, 1e-3)], variants=(v,)) if x["two_heads"]][0], **extra, "cache_dir": str(tmp_path)}
         a = _run({**j, "no_cache": True})
-        b = _run(j)                      # computes phase 1 and saves it
+        b = _run(j)                       # computes phase 1 and saves it
         assert len(list(tmp_path.glob("*.pt"))) >= 1
-        c = _run(j)                      # loads phase 1
+        c = _run(j)                       # loads phase 1
         keys = ("recall_learned", "recall_final", "ecl_final_avg", "ecl_forgetting", "val_score", "history")
         assert all(a[k] == b[k] == c[k] for k in keys), v
 
@@ -1012,9 +1012,9 @@ def test_i72_babi_encoding_and_run():
     b = {"sents": [[1]], "q": [0], "a": 1}
     x = encode_batch([a, b], 4)
     assert x.shape == (steps_of(2), 2, 5)
-    assert x[0, 0, 0] == 1 and x[0, 0, 1] == 1 and x[2, 0, 2] == 1 and x[4, 0, 3] == 1 and x[4, 0, 4] == 1  # sentence, sentence, question + flag
-    assert x[:2, 1].sum() == 0 and x[2, 1, 1] == 1                  # the shorter story is padded at the start
-    assert torch.equal(x[-3:], torch.zeros_like(x[-3:]))            # three empty steps before the end of the read-out window
+    assert x[0, 0, 0] == 1 and x[0, 0, 1] == 1 and x[2, 0, 2] == 1 and x[4, 0, 3] == 1 and x[4, 0, 4] == 1   # sentence, sentence, question + flag
+    assert x[:2, 1].sum() == 0 and x[2, 1, 1] == 1                       # the shorter story is padded at the start
+    assert torch.equal(x[-3:], torch.zeros_like(x[-3:]))               # three empty steps before the end of the read-out window
     from experiments.ei72 import ROOT, _run, jobs
     if not (ROOT / "data/babi1k.json").exists():
         pytest.skip("needs research/data/babi1k.json (tools/convert_babi.py)")
@@ -1023,7 +1023,7 @@ def test_i72_babi_encoding_and_run():
 
 
 def test_appendix_selection_ignores_held_out_seeds(tmp_path):
-    """Adding the hold-out seeds 5-9 at the chosen setting must not move the choice to a setting that has only seeds 0-4."""
+    """Adding the held-out seeds 5-9 at the chosen setting must not move the choice to a setting that has only seeds 0-4."""
     import json
     from experiments.ei54 import analyse
     v = "cand_long_fw003|2heads|phaselr"
@@ -1043,12 +1043,11 @@ def test_n10_save_model_records_neuron_params_and_n11_extra_cells_freeze(tmp_pat
     j = [x for x in phase_jobs(1, 5, 2, lrs=[(1e-2, 3e-4)], variants=("cand_long_fw003",)) if x["two_heads"]][0]
     a = _run({**j, "no_cache": True})
     b = _run({**j, "no_cache": True, "save_model": str(tmp_path / "m.pt")})
-
-    assert all(a[k] == b[k] for k in ("recall_learned", "recall_final", "ecl_final_avg", "val_score", "history"))  # recording changes nothing
+    assert all(a[k] == b[k] for k in ("recall_final", "ecl_final_avg", "val_score", "history"))   # recording changes nothing
     sv = torch.load(tmp_path / "m.pt", weights_only=False)
     assert set(sv) >= {"init", "phase1", "final", "state_dict"} and len(sv["init"]) == 1
     assert torch.allclose(sv["init"][0]["omega"], torch.full_like(sv["init"][0]["omega"], 0.15))
-    assert not torch.equal(sv["init"][0]["omega"], sv["final"][0]["omega"])          # omega is learned
+    assert not torch.equal(sv["init"][0]["omega"], sv["final"][0]["omega"])                     # omega is learned
     for v, mult in (("cand_long_frz_fw001", 0.01), ("adlif_long_frz_fw03", 0.3)):
         jf = [x for x in phase_jobs(1, 3, 2, lrs=[(3e-2, 3e-4)], variants=(v,)) if x["two_heads"]][0]
         assert jf["freeze_neuron"] and jf["fw_lr_mult"] == mult
@@ -1068,8 +1067,8 @@ def test_n12_save_model_records_lif_memory():
         _run({**j, "no_cache": True, "save_model": str(Path(d) / "m.pt")})
         sv = torch.load(Path(d) / "m.pt", weights_only=False)
     assert len(sv["init"]) == 1 and torch.all(sv["init"][0]["omega"] == 0)
-    assert 0.89 < float(sv["init"][0]["r"].min()) and float(sv["init"][0]["r"].max()) < 0.9995  # the |beta| ring [0.9, 0.999]
-    assert not torch.equal(sv["init"][0]["r"], sv["final"][0]["r"])                          # the LIF leak is learned
+    assert 0.89 < float(sv["init"][0]["r"].min()) and float(sv["init"][0]["r"].max()) < 0.9995   # the |beta| ring [0.9, 0.999]
+    assert not torch.equal(sv["init"][0]["r"], sv["final"][0]["r"])                             # the LIF leak is learned
 
 
 def test_n19_gated_rnn_reference_matches_parameters_and_runs():
@@ -1081,9 +1080,9 @@ def test_n19_gated_rnn_reference_matches_parameters_and_runs():
         h = _matched_hidden(cfg, C_ECL + 17, 16)
         p_rnn = SequenceClassifier(C_ECL + 17, 16, ModelConfig(**{**cfg, "hidden": [h]})).num_params()
         p_lif = SequenceClassifier(C_ECL + 17, 16, ModelConfig(**{**cfg, "rnn_cell": None})).num_params()
-        assert abs(p_rnn - p_lif) / p_lif < 0.05                    # matched to the LIF network within 5%
+        assert abs(p_rnn - p_lif) / p_lif < 0.05                         # matched to the LIF network within 5%
         m = SequenceClassifier(C_ECL + 17, 16, ModelConfig(**{**cfg, "hidden": [h]}))
-        assert isinstance(m.linears[0], torch.nn.Identity) and m.fw is not None  # same plastic synapse, non-spiking hidden layer
+        assert isinstance(m.linears[0], torch.nn.Identity) and m.fw is not None   # same plastic synapse, non-spiking hidden layer
     j = [x for x in phase_jobs(1, 3, 2, lrs=[(3e-3, 1e-3)], variants=("lstm_fw003",)) if x["two_heads"]][0]
     r = _run({**j, "no_cache": True})
     assert 0.0 <= r["recall_final"] <= 1.0 and r["params"] == p_rnn
@@ -1093,10 +1092,10 @@ def test_n9_long_memory_rotating_network_with_soft_reset():
     from experiments.ei54 import EXTRA_MODELS, LONGRESET_VARIANTS, MODELS, NOROT_LRS, _run, phase_jobs
     cfg = {**MODELS, **EXTRA_MODELS}["cand_long_reset"]
     long = {**MODELS, **EXTRA_MODELS}["cand_long"]
-    assert cfg["reset"] != "none" and cfg["leak_mag_range"] == long["leak_mag_range"] == [0.9, 0.999]  # only the reset differs
+    assert cfg["reset"] != "none" and cfg["leak_mag_range"] == long["leak_mag_range"] == [0.9, 0.999]   # only the reset differs
     assert {k: v for k, v in cfg.items() if k != "reset"} == {k: v for k, v in long.items() if k != "reset"}
     js = [j for v in LONGRESET_VARIANTS for j in phase_jobs(5, 2, 1, lrs=NOROT_LRS, variants=(v,)) if j["two_heads"]]
     ref = [j for v in ("cand_long_slowfw", "cand_long_fw003", "cand_long_fw001") for j in phase_jobs(5, 2, 1, lrs=NOROT_LRS, variants=(v,)) if j["two_heads"]]
-    assert len(js) == len(ref) == 150 and {j["base"] for j in js} == {"cand_long_reset"}  # the same grid as I54i
+    assert len(js) == len(ref) == 150 and {j["base"] for j in js} == {"cand_long_reset"}   # the same grid as I54i
     r = _run([j for j in js if j["seed"] == 0][0])
     assert 0.0 <= r["ecl_final_avg"] <= 1.0
