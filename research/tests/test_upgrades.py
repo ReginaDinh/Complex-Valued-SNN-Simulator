@@ -1,4 +1,4 @@
-"""Step-1 upgrades: reset none / brf, heterogeneous frequency init, FFT recurrence, PRF and C-SILIF."""
+"""Step-1 upgrades: reset none / brf, heterogeneous frequency init, FFT recurrence, PRF and C-SiLIF."""
 
 import math
 
@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from cvsnn.hardware import estimate_cost, load_energy_table
-from cvsnn.layers import CLIF, PRF, CSILIF, linear_recurrence
+from cvsnn.layers import CLIF, PRF, CSiLIF, linear_recurrence
 from cvsnn.models import ModelConfig, SequenceClassifier
 
 
@@ -52,8 +52,8 @@ def test_brf_reset_keeps_phase_raises_threshold_and_damps():
     x = torch.zeros(4, 1, 1, dtype=torch.complex128)
     x[0, 0, 0] = 1.5 * complex(math.cos(0.7), math.sin(0.7))
     s, pot, h = n(x)
-    assert h[0, 0, 0] == 1 and h[1:].sum() == 0            # refractory: threshold rose to 1 + q
-    assert torch.angle(pot[1, 0, 0]).item() == pytest.approx(0.7)  # phase preserved (no subtraction)
+    assert h[0, 0, 0] == 1 and h[1:].sum() == 0          # refractory: threshold rose to 1 + q
+    assert torch.angle(pot[1, 0, 0]).item() == pytest.approx(0.7)   # phase preserved (no subtraction)
     beta = torch.sigmoid(n.leak_mag_raw)[0].item()
     assert pot[1, 0, 0].abs().item() == pytest.approx(1.5 * beta * math.exp(-1.0), rel=1e-6)  # extra damping
 
@@ -65,7 +65,7 @@ def test_heterogeneous_init_ranges():
     assert r.min() >= 0.9 - 1e-6 and r.max() <= 0.999 + 1e-6 and r.std() > 0.01
     w = n.leak_phase
     assert w.min() >= 0.01 - 1e-6 and w.max() <= 1.0 + 1e-6
-    assert abs(torch.log(w).mean().item() - (math.log(0.01) + math.log(1.0)) / 2) < 0.1  # log-uniform
+    assert abs(torch.log(w).mean().item() - (math.log(0.01) + math.log(1.0)) / 2) < 0.1   # log-uniform
 
 
 def test_prf_and_csilif_follow_their_equations():
@@ -76,7 +76,7 @@ def test_prf_and_csilif_follow_their_equations():
     dt = torch.exp(p.log_dt)
     ref = _sequential(torch.complex(x * dt, torch.zeros_like(x)), p.beta.to(torch.complex128))
     assert torch.allclose(u, ref, atol=1e-9) and torch.equal(h, (u.real >= 0.2).double())
-    c = CSILIF(4, threshold=0.3).double()
+    c = CSiLIF(4, threshold=0.3).double()
     s, u, h = c(x)
     ref = _sequential(torch.complex(x * c.b_re, x * c.b_im), c.beta.to(torch.complex128))
     assert torch.allclose(u, ref, atol=1e-9)
@@ -103,7 +103,7 @@ def test_cvsnn_model_with_new_options():
     torch.manual_seed(0)
     for reset in ("none", "brf"):
         m = SequenceClassifier(8, 3, ModelConfig(kind="cvsnn", hidden=[6], reset=reset, leak_mag_range=(0.9, 0.999),
-                                               leak_phase_range=(0.05, 1.0)))
+                                                 leak_phase_range=(0.05, 1.0)))
         logits, _ = m(torch.randn(25, 4, 8, dtype=torch.complex64))
         torch.nn.functional.cross_entropy(logits, torch.tensor([0, 1, 2, 1])).backward()
         assert all(torch.isfinite(p.grad).all() for p in m.parameters() if p.grad is not None)
