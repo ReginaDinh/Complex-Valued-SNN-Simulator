@@ -1,6 +1,6 @@
 """B3b: strong replay plus synaptic consolidation (SI) for long lists in the memory system (plan B, PROJECT-STATUS.md).
 
-    cd research && .venv/bin/python -m experiments.eb3b       # full (parallel, resumable with --out)
+    cd research && .venv/bin/python -m experiments.eb3b              # full (parallel, resumable with --out)
 
 B3: strong replay (256 lists per version, half of every batch) brought the CV-SNN to 82.8% (joint training 90.3%) and
 LIF to 64.2% (joint 66.4%). Here Synaptic Intelligence (Re/Im, cvsnn.consolidation) is added on top, strength c in
@@ -29,14 +29,14 @@ N_TASKS = 5
 N_CH = 16
 MODES = ("replay",)
 STEPS = {"first": 3000, "later": 1000}
-REPLAY = {"per_task": 256, "frac": 0.5}  # B2: 64 and 0.25
+REPLAY = {"per_task": 256, "frac": 0.5}   # B2: 64 and 0.25
 LRS = (3e-3,)
-SI_C = (0.1, 1.0, 10.0)  # 0.1 added after the first pass chose 1, the lower edge
+SI_C = (0.1, 1.0, 10.0)   # 0.1 added after the first pass chose 1, the lower edge
 NETS = {
     "cv": {"kind": "cvsnn", "hidden": [18], "extra": {"reset": "none", **HET_CV, "fast_weights": {**FW2, "theta_tag": True, "chunk": 16}}},
     "lif": {"kind": "lif", "hidden": [30], "extra": {"reset": "none", "fast_weights": {**FW2, "d": 11, "theta_tag": True, "chunk": 16}}},
 }
-HP = {"threshold": 0.5, "leak_mag_range": [0.9, 0.999]}  # chosen on validation in I28b for both networks
+HP = {"threshold": 0.5, "leak_mag_range": [0.9, 0.999]}   # chosen on validation in I28b for both networks
 
 
 def jobs(seeds: int, quick: bool) -> list[dict]:
@@ -61,15 +61,15 @@ def _run(job: dict) -> dict:
     seed_all(job["seed"])
     cplx = job["model"]["kind"] == "cvsnn"
     ns = TASK["n_symbols"]
-    codes = torch.randint(0, 2, (ns, N_CH), generator=torch.Generator().manual_seed(900 + job["seed"])).float() * 2 - 1  # +-1 symbol codes
+    codes = torch.randint(0, 2, (ns, N_CH), generator=torch.Generator().manual_seed(900 + job["seed"])).float() * 2 - 1   # +-1 symbol codes
     perms = [torch.arange(N_CH)] + [torch.randperm(N_CH, generator=torch.Generator().manual_seed(700 + 31 * job["seed"] + i)) for i in range(1, N_TASKS)]
 
     def sample(task, n, g):
         """task: an int, or None for a random task per list (joint training)."""
         x, theta, y, _ = serial_recall_batch(n, generator=g, **TASK)
-        dist = x[..., :ns] @ codes                                        # (T, B, 16): the code of the symbol shown, 0 elsewhere
+        dist = x[..., :ns] @ codes                                              # (T, B, 16): the code of the symbol shown, 0 elsewhere
         tk = torch.randint(0, N_TASKS, (n,), generator=g) if task is None else torch.full((n,), task)
-        idx = torch.stack([perms[int(t)] for t in tk], 0)                  # (B, 16)
+        idx = torch.stack([perms[int(t)] for t in tk], 0)                       # (B, 16)
         dist = torch.gather(dist, 2, idx.unsqueeze(0).expand(dist.shape[0], -1, -1))
         return network_input(torch.cat([dist, x[..., ns:]], -1), theta, cplx), theta, y
 
@@ -128,7 +128,7 @@ def analyse(rows: list[dict], out: Path) -> str:
     mean = lambda rs, f: sum(f(r) for r in rs) / len(rs)
     L = ["# B3b: strong replay + SI on 24-item lists, 5 task versions (chance 0.125); SI strength c chosen on validation", "",
          "lr chosen per cell on validation. learned = accuracy on each task right after it.", "",
-         "| network | condition (lr 3e-3) | params | final avg acc | forgetting (↓) | learned | per-seed forgetting |", "|---|---|---|---|---|---|---|---|"]
+         "| network | condition (lr 3e-3) | params | final avg acc | forgetting (↓) | learned | per-seed forgetting |", "|---|---|---|---|---|---|---|"]
     sel = {}
     for name in NETS:
         for rp in MODES:
