@@ -41,8 +41,8 @@ def test_delayed_order_task_labels_and_silence():
     from cvsnn.data.synthetic import delayed_order_batch
     x, y = delayed_order_batch(256, symbols=4, channels=8, window=10, delay=20, tail=5, generator=torch.Generator().manual_seed(0))
     assert x.shape == (35, 256, 8) and y.min() >= 0 and y.max() <= 11
-    assert x[10:].abs().sum() == 0            # nothing after the presentation window
-    assert (x.sum(dim=(0, 2)) == 4).all()     # two pulses x 2 channels each
+    assert x[10:].abs().sum() == 0              # nothing after the presentation window
+    assert (x.sum(dim=(0, 2)) == 4).all()       # two pulses x 2 channels each
     assert len(torch.unique(y)) == 12
 
 
