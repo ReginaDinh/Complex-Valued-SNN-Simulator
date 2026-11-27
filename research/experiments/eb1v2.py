@@ -188,5 +188,6 @@ def main() -> None:
     print(analyse([json.loads(l) for l in rp.read_text().splitlines()], out))
     print(f"results: {out}")
 
+
 if __name__ == "__main__":
     main()
