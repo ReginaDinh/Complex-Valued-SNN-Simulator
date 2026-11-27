@@ -39,7 +39,7 @@ NETS = {
     "cv": {"kind": "cvsnn", "hidden": [18], "extra": {"reset": "none", **HET_CV, "fast_weights": {**FW2, "theta_tag": True, "chunk": 16}}},
     "lif": {"kind": "lif", "hidden": [30], "extra": {"reset": "none", "fast_weights": {**FW2, "d": 11, "theta_tag": True, "chunk": 16}}},
 }
-HP = {"threshold": 0.5, "leak_mag_range": [0.9, 0.999]}  # chosen on validation in I28b for both networks
+HP = {"threshold": 0.5, "leak_mag_range": [0.9, 0.999]}   # chosen on validation in I28b for both networks
 
 
 def jobs(seeds: int, quick: bool) -> list[dict]:
@@ -169,7 +169,7 @@ def main() -> None:
             if i % 10 == 0 or i == len(futs):
                 print(f"  {i}/{len(futs)}  {datetime.now():%H:%M:%S}", flush=True)
     print(analyse([json.loads(l) for l in rp.read_text().splitlines()], out))
-    printf(f"results: {out}")
+    print(f"results: {out}")
 
 
 if __name__ == "__main__":
