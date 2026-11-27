@@ -1,6 +1,6 @@
 """B3: stronger consolidation for long lists in the memory system (step 3 of plan B, PROJECT-STATUS.md).
 
-    cd research && .venv/bin/python -m experiments.eb3        # full (parallel, resumable with --out)
+    cd research && .venv/bin/python -m experiments.eb3              # full (parallel, resumable with --out)
     .venv/bin/python -m experiments.eb3 --quick
 
 B2 (24-item lists, 5 task versions): with joint training the CV-SNN reached 90% and LIF 66%, but with replay (64 stored
@@ -33,13 +33,13 @@ N_TASKS = 5
 N_CH = 16
 MODES = ("replay",)
 STEPS = {"first": 3000, "later": 1000}
-REPLAY = {"per_task": 256, "frac": 0.5}  # B2: 64 and 0.25
-LRS = (1e-3, 3e-3, 1e-2)  # 1e-2 added after the first pass chose 3e-3, the grid edge, in every cell
+REPLAY = {"per_task": 256, "frac": 0.5}   # B2: 64 and 0.25
+LRS = (1e-3, 3e-3, 1e-2)   # 1e-2 added after the first pass chose 3e-3, the grid edge, in every cell
 NETS = {
     "cv": {"kind": "cvsnn", "hidden": [18], "extra": {"reset": "none", **HET_CV, "fast_weights": {**FW2, "theta_tag": True, "chunk": 16}}},
     "lif": {"kind": "lif", "hidden": [30], "extra": {"reset": "none", "fast_weights": {**FW2, "d": 11, "theta_tag": True, "chunk": 16}}},
 }
-HP = {"threshold": 0.5, "leak_mag_range": [0.9, 0.999]}  # chosen on validation in I28b for both networks
+HP = {"threshold": 0.5, "leak_mag_range": [0.9, 0.999]}   # chosen on validation in I28b for both networks
 
 
 def jobs(seeds: int, quick: bool) -> list[dict]:
@@ -64,15 +64,15 @@ def _run(job: dict) -> dict:
     seed_all(job["seed"])
     cplx = job["model"]["kind"] == "cvsnn"
     ns = TASK["n_symbols"]
-    codes = torch.randint(0, 2, (ns, N_CH), generator=torch.Generator().manual_seed(900 + job["seed"])).float() * 2 - 1  # +-1 symbol codes
+    codes = torch.randint(0, 2, (ns, N_CH), generator=torch.Generator().manual_seed(900 + job["seed"])).float() * 2 - 1   # +-1 symbol codes
     perms = [torch.arange(N_CH)] + [torch.randperm(N_CH, generator=torch.Generator().manual_seed(700 + 31 * job["seed"] + i)) for i in range(1, N_TASKS)]
 
     def sample(task, n, g):
         """task: an int, or None for a random task per list (joint training)."""
         x, theta, y, _ = serial_recall_batch(n, generator=g, **TASK)
-        dist = x[..., :ns] @ codes                                        # (T, B, 16): the code of the symbol shown, 0 elsewhere
+        dist = x[..., :ns] @ codes                                              # (T, B, 16): the code of the symbol shown, 0 elsewhere
         tk = torch.randint(0, N_TASKS, (n,), generator=g) if task is None else torch.full((n,), task)
-        idx = torch.stack([perms[int(t)] for t in tk], 0)                  # (B, 16)
+        idx = torch.stack([perms[int(t)] for t in tk], 0)                       # (B, 16)
         dist = torch.gather(dist, 2, idx.unsqueeze(0).expand(dist.shape[0], -1, -1))
         return network_input(torch.cat([dist, x[..., ns:]], -1), theta, cplx), theta, y
 
