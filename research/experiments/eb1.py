@@ -1,7 +1,7 @@
 """B1: a small hippocampus-like memory system: fast storage in plastic synapses (theta-gamma tagged) plus slow
 learning in the ordinary weights, kept from forgetting by replay. Step 1 of plan B (PROJECT-STATUS.md).
 
-    cd research && .venv/bin/python -m experiments.eb1        # full (parallel, resumable with --out)
+    cd research && .venv/bin/python -m experiments.eb1              # full (parallel, resumable with --out)
     .venv/bin/python -m experiments.eb1 --quick
 
 Task: the ordered recall of I28b (8 items, one per gamma slot of a theta cycle, query = replayed theta phase), learned
@@ -39,7 +39,7 @@ NETS = {
     "cv": {"kind": "cvsnn", "hidden": [18], "extra": {"reset": "none", **HET_CV, "fast_weights": {**FW2, "theta_tag": True, "chunk": 16}}},
     "lif": {"kind": "lif", "hidden": [30], "extra": {"reset": "none", "fast_weights": {**FW2, "d": 11, "theta_tag": True, "chunk": 16}}},
 }
-HP = {"threshold": 0.5, "leak_mag_range": (0.9, 0.999)}  # chosen on validation in I28b for both networks
+HP = {"threshold": 0.5, "leak_mag_range": [0.9, 0.999]}  # chosen on validation in I28b for both networks
 
 
 def jobs(seeds: int, quick: bool) -> list[dict]:
@@ -68,7 +68,7 @@ def _run(job: dict) -> dict:
 
     def sample(task, n, g):
         x, theta, y, _ = serial_recall_batch(n, generator=g, **TASK)
-        x = torch.cat([x[..., :ns][..., perms[task]], x[..., ns:]], -1)   # symbol k arrives on channel perm[k]
+        x = torch.cat([x[..., :ns][..., perms[task]], x[..., ns:]], -1)        # symbol k arrives on channel perm[k]
         return network_input(x, theta, cplx), theta, y
 
     model = SequenceClassifier(sample(0, 1, torch.Generator().manual_seed(0))[0].shape[-1], ns, ModelConfig(**job["model"]))
@@ -137,9 +137,7 @@ def analyse(rows: list[dict], out: Path) -> str:
             L.append(f"| {name} | {'yes' if rp else 'no'} | {lr:g} | {rs[0]['params']} | {a[0]:.3f} ± {a[2]:.3f} | {f[0]:.3f} ± {f[2]:.3f} | {le[0]:.3f} | "
                      + ", ".join(f"{r['forgetting']:.2f}" for r in rs) + " |")
     (out / "selected.json").write_text(json.dumps(sel, indent=2))
-    md = "
-".join(L) + "
-"
+    md = "\n".join(L) + "\n"
     (out / "summary.md").write_text(md)
     return md
 
@@ -166,12 +164,12 @@ def main() -> None:
     with ProcessPoolExecutor(a.workers) as pool, open(rp, "a") as f:
         futs = [pool.submit(_run, j) for j in todo]
         for i, fu in enumerate(as_completed(futs), 1):
-            f.write(json.dumps(fu.result()) + "
-")
+            f.write(json.dumps(fu.result()) + "\n")
             f.flush()
             if i % 10 == 0 or i == len(futs):
                 print(f"  {i}/{len(futs)}  {datetime.now():%H:%M:%S}", flush=True)
     print(analyse([json.loads(l) for l in rp.read_text().splitlines()], out))
+    printf(f"results: {out}")
 
 
 if __name__ == "__main__":
