@@ -1,9 +1,9 @@
 """B1v2: a small hippocampus-like memory system: fast storage in plastic synapses (theta-gamma tagged) plus slow
 learning in the ordinary weights, kept from forgetting by replay. Step 1 of plan B, corrected (PROJECT-STATUS.md).
 
-    cd research && .venv/bin/python -m experiments.eb1v2        # full (parallel, resumable with --out)
+    cd research && .venv/bin/python -m experiments.eb1v2            # full (parallel, resumable with --out)
     .venv/bin/python -m experiments.eb1v2 --quick
-    .venv/bin/python -m experiments.eb1v2 --pilot              # seed 0, lr 3e-3: is the joint task learnable?
+    .venv/bin/python -m experiments.eb1v2 --pilot                   # seed 0, lr 3e-3: is the joint task learnable?
 
 Why v2: in B1 the symbols were one-hot and each task permuted the symbol channels, so the same input had to give
 different labels in different tasks with nothing telling the tasks apart: no network can solve all of them at once
@@ -11,7 +11,7 @@ different labels in different tasks with nothing telling the tasks apart: no net
 drawn per seed) and task i permutes the 16 channels (task 0: identity), as in E-CL: the tasks no longer conflict.
 A joint-training condition (all 5 tasks mixed from the start, same number of steps) gives the upper bound.
 Task: the ordered recall of I28b (8 items, one per gamma slot of a theta cycle, query = replayed theta phase), learned
-as 5 tasks in sequence; the plastic synapse stores each list as it comes (empty at the start of every list). Training: 3000 steps on task 0, then 1000 steps on each
+as 5 tasks in sequence; the plastic synapse stores each list as it comes (empty at the start of every list). Training: 3000 steps on task 0, then 1000 steps on each later task, batch 64,
 AdamW; lr {1e-3, 3e-3} chosen on validation. Replay: after each task 64 of its lists are stored; on later tasks a
 quarter of every batch is drawn from the store.
 Networks (the I28b tagged set-ups; all with the chunked plastic-synapse scan, chunk 16):
@@ -46,7 +46,7 @@ NETS = {
     "cv": {"kind": "cvsnn", "hidden": [18], "extra": {"reset": "none", **HET_CV, "fast_weights": {**FW2, "theta_tag": True, "chunk": 16}}},
     "lif": {"kind": "lif", "hidden": [30], "extra": {"reset": "none", "fast_weights": {**FW2, "d": 11, "theta_tag": True, "chunk": 16}}},
 }
-HP = {"threshold": 0.5, "leak_mag_range": [0.9, 0.999]}  # chosen on validation in I28b for both networks
+HP = {"threshold": 0.5, "leak_mag_range": [0.9, 0.999]}   # chosen on validation in I28b for both networks
 
 
 def jobs(seeds: int, quick: bool) -> list[dict]:
@@ -71,15 +71,15 @@ def _run(job: dict) -> dict:
     seed_all(job["seed"])
     cplx = job["model"]["kind"] == "cvsnn"
     ns = TASK["n_symbols"]
-    codes = torch.randint(0, 2, (ns, N_CH), generator=torch.Generator().manual_seed(900 + job["seed"])).float() * 2 - 1  # +-1 symbol codes
+    codes = torch.randint(0, 2, (ns, N_CH), generator=torch.Generator().manual_seed(900 + job["seed"])).float() * 2 - 1   # +-1 symbol codes
     perms = [torch.arange(N_CH)] + [torch.randperm(N_CH, generator=torch.Generator().manual_seed(700 + 31 * job["seed"] + i)) for i in range(1, N_TASKS)]
 
     def sample(task, n, g):
         """task: an int, or None for a random task per list (joint training)."""
         x, theta, y, _ = serial_recall_batch(n, generator=g, **TASK)
-        dist = x[..., :ns] @ codes                                        # (T, B, 16): the code of the symbol shown, 0 elsewhere
+        dist = x[..., :ns] @ codes                                              # (T, B, 16): the code of the symbol shown, 0 elsewhere
         tk = torch.randint(0, N_TASKS, (n,), generator=g) if task is None else torch.full((n,), task)
-        idx = torch.stack([perms[int(t)] for t in tk], 0)                  # (B, 16)
+        idx = torch.stack([perms[int(t)] for t in tk], 0)                       # (B, 16)
         dist = torch.gather(dist, 2, idx.unsqueeze(0).expand(dist.shape[0], -1, -1))
         return network_input(torch.cat([dist, x[..., ns:]], -1), theta, cplx), theta, y
 
@@ -151,9 +151,7 @@ def analyse(rows: list[dict], out: Path) -> str:
             L.append(f"| {name} | {rp} | {lr:g} | {rs[0]['params']} | {a[0]:.3f} ± {a[2]:.3f} | {f[0]:.3f} ± {f[2]:.3f} | {le[0]:.3f} | "
                      + ", ".join(f"{r['forgetting']:.2f}" for r in rs) + " |")
     (out / "selected.json").write_text(json.dumps(sel, indent=2))
-    md = "
-".join(L) + "
-"
+    md = "\n".join(L) + "\n"
     (out / "summary.md").write_text(md)
     return md
 
@@ -183,13 +181,12 @@ def main() -> None:
     with ProcessPoolExecutor(a.workers) as pool, open(rp, "a") as f:
         futs = [pool.submit(_run, j) for j in todo]
         for i, fu in enumerate(as_completed(futs), 1):
-            f.write(json.dumps(fu.result()) + "
-")
+            f.write(json.dumps(fu.result()) + "\n")
             f.flush()
             if i % 10 == 0 or i == len(futs):
                 print(f"  {i}/{len(futs)}  {datetime.now():%H:%M:%S}", flush=True)
     print(analyse([json.loads(l) for l in rp.read_text().splitlines()], out))
-
+    print(f"results: {out}")
 
 if __name__ == "__main__":
     main()
